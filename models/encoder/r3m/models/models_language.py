@@ -18,8 +18,8 @@ class LangEncoder(nn.Module):
 
         self.device = device
         self.modelname = "distilbert-base-uncased"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.modelname)
-        self.model = AutoModel.from_pretrained(self.modelname).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.modelname, local_files_only=True)
+        self.model = AutoModel.from_pretrained(self.modelname, local_files_only=True).to(self.device)
         self.lang_size = 768
 
     def forward(self, langs):

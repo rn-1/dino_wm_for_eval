@@ -1,0 +1,66 @@
+# conf/rollout_robomimic.yaml
+# Rollout / evaluation config for a dino_wm world model trained on Robomimic data.
+# Usage (from dino_wm root):
+#
+#   python robomimic_code/rollout_robomimic.py \
+#       ckpt_base_path=/project2/... \
+#       model_name=robomimic_lift \
+#       rollout_mode=closed_loop_policy
+#
+# or via Hydra sweep on the cluster.
+
+defaults:
+  - _self_
+  - override hydra/launcher: submitit_slurm
+
+hydra:
+  run:
+    dir: rollout_outputs/${now:%Y%m%d%H%M%S}_${replace_slash:${model_name}}
+  sweep:
+    dir: rollout_outputs/${now:%Y%m%d%H%M%S}_${replace_slash:${model_name}}
+    subdir: ${hydra.job.num}
+  launcher:
+    submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+    nodes: 1
+    tasks_per_node: 1
+    cpus_per_task: 16
+    mem_gb: 128
+    gres: "gpu:a100:1"
+    qos: "explore"
+    timeout_min: 720
+    setup:
+      - "export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)"
+      - "export MASTER_PORT=$(for port in $(shuf -i 30000-65500 -n 20); do if [[ $(netstat -tupln 2>&1 | grep $port | wc -l) -eq 0 ]]; then echo $port; break; fi; done)"
+
+# ── Model to load ────────────────────────────────────────────────────────────
+ckpt_base_path: /project2/jessetho_1732/rl_eval_wm/dino_wm
+model_name: robomimic_lift          # subdir under ${ckpt_base_path}/outputs/
+model_epoch: latest
+
+seed: 42
+
+# ── Policy ───────────────────────────────────────────────────────────────────
+# "gt"    — replay ground-truth actions from the dataset (open-loop WM test)
+# "ckpt"  — load a pretrained robomimic policy from a checkpoint file
+policy_mode: gt
+policy_ckpt: null         # path to robomimic BC/HBC/Diffusion checkpoint (.pth)
+policy_img_size: 84       # image size the policy expects (robomimic default)
+
+# ── Rollout settings ─────────────────────────────────────────────────────────
+# "open_loop"          — run WM with GT actions, compare to GT observations
+# "closed_loop_policy" — WM + policy in the loop; score with Robometer
+rollout_mode: open_loop
+n_rollouts: 10
+rollout_length: 20
+min_horizon: 4
+rand_start_end: true
+num_hist: 3               # must match model training config
+
+# ── Robometer ────────────────────────────────────────────────────────────────
+robometer_prompt: "Pick up the red cube and place it in the bin."
+
+# ── Output ───────────────────────────────────────────────────────────────────
+save_video: true
+save_images: false
+video_fps: 10
+wandb_logging: false

@@ -74,7 +74,7 @@ class R3M(nn.Module):
 
             self.outdim = 768
             self.convnet = AutoModel.from_config(
-                config=AutoConfig.from_pretrained("google/vit-base-patch32-224-in21k")
+                config=AutoConfig.from_pretrained("google/vit-base-patch32-224-in21k", local_files_only=True)
             ).to(self.device)
 
         if self.size == 0:

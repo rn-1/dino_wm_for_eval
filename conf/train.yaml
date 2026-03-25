@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - env: point_maze
+  - env: pusht_noise
   - encoder: dino 
   - action_encoder: proprio
   - proprio_encoder: proprio
@@ -9,7 +9,7 @@ defaults:
   - override hydra/launcher: submitit_slurm
 
 # base path to save model outputs. Checkpoints will be saved to ${ckpt_base_path}/outputs.
-ckpt_base_path: ./ # put absolute path here
+ckpt_base_path: ./dino_ckpts # put absolute path here
 
 hydra:
   run:
@@ -23,7 +23,7 @@ hydra:
     tasks_per_node: 1
     cpus_per_task: 8
     mem_gb: 512
-    gres: "gpu:h100:1"
+    gres: "gpu:rtxa6000:2"
     timeout_min: 2880
     setup: ["export DEBUGVAR=$(scontrol show hostnames $SLURM_JOB_NODELIST)",
             export MASTER_ADDR="$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)",
