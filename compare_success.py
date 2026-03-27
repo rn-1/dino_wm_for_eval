@@ -252,7 +252,7 @@ def sample_valid_trajectory(dset, rollout_length, frameskip, rng):
 # ---------------------------------------------------------------------------
 
 def compare_success_main(cfg):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(cfg.device)
     seed(cfg.seed)
     rng = np.random.RandomState(cfg.seed)
 
@@ -444,6 +444,8 @@ def parse_args():
     parser.add_argument("--video_fps", type=int, default=4,
                         help="FPS for saved rollout videos (default: 4)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", default="cuda",
+                        help="Torch device to use (default: cuda)")
     return parser.parse_args()
 
 

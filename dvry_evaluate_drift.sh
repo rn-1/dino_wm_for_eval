@@ -6,7 +6,7 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
-#SBATCH --time=2:00:00
+#SBATCH --time=48:00:00
 #SBATCH --job-name=evaluate_drift
 
 set -euo pipefail
@@ -60,8 +60,31 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --model_epoch latest \
     --policy_model_name lerobot/diffusion_pusht \
     --n_eval 50 \
+    --rollout_length 5 \
+    --policy_img_size 96 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/drift \
+    --seed 42 \
+    --device cuda
+  python evaluate_drift.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --policy_model_name lerobot/diffusion_pusht \
+    --n_eval 50 \
+    --rollout_length 8 \
+    --policy_img_size 96 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/drift \
+    --seed 42 \
+    --device cuda
+  python evaluate_drift.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --policy_model_name lerobot/diffusion_pusht \
+    --n_eval 50 \
     --rollout_length 10 \
     --policy_img_size 96 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/drift \
-    --seed 42
+    --seed 42 \
+    --device cuda
 "

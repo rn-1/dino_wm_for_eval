@@ -117,24 +117,24 @@ def sample_batch(dset, batch_size, rollout_length, frameskip, num_hist, device, 
     actions_list = []
     gt_frames_list = []
 
-    indices = list(range(len(dset)))
-    rng.shuffle(indices)
-    it = iter(indices)
+    # Build list of valid indices (trajectories with enough frames)
+    valid_indices = [
+        i for i in range(len(dset))
+        if dset[i][0]["visual"].shape[0] >= min_raw_len
+    ]
+    if len(valid_indices) == 0:
+        raise RuntimeError(
+            f"No trajectories in dataset have >= {min_raw_len} raw frames "
+            f"(rollout_length={rollout_length}, frameskip={frameskip}). "
+            f"Dataset has {len(dset)} trajectories total."
+        )
 
+    # Sample with replacement if dataset is smaller than batch_size
     collected = 0
     while collected < batch_size:
-        try:
-            idx = next(it)
-        except StopIteration:
-            raise RuntimeError(
-                f"Dataset exhausted before collecting {batch_size} valid trajectories "
-                f"(need >= {min_raw_len} raw frames, rollout_length={rollout_length}, "
-                f"frameskip={frameskip})."
-            )
+        idx = valid_indices[rng.randint(len(valid_indices))]
 
         obs, act, state, _ = dset[idx]
-        if obs["visual"].shape[0] < min_raw_len:
-            continue
 
         # Subsample observations at frameskip intervals → (rollout_length+1, ...)
         obs_sub = {
@@ -250,7 +250,7 @@ def _save_mse_plots(per_step_mse, per_traj_mse, output_dir, model_name, rollout_
 
 
 def evaluate_wm_main(cfg):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(cfg.device)
     seed(cfg.seed)
     rng = np.random.RandomState(cfg.seed)
 
@@ -393,6 +393,8 @@ def parse_args():
     parser.add_argument("--n_save_examples", type=int, default=5,
                         help="Number of highest-MSE trajectories to save as PNG grids (0=none)")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--device", default="cuda",
+                        help="Torch device to use (default: cuda)")
     return parser.parse_args()
 
 

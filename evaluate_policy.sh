@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --job-name=evaluate_policy
 #SBATCH --output=evaluate_policy.out
 #SBATCH --error=evaluate_policy.err
@@ -69,30 +69,39 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --policy_model_name lerobot/diffusion_pusht \
     --n_eval 10000 \
     --K 50 \
+    --rollout_length 5 \
+    --policy_img_size 96 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
+    --seed 42 \
+    --device cuda &
+  PID1=\$!
+  python evaluate_policy.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --policy_model_name lerobot/diffusion_pusht \
+    --n_eval 10000 \
+    --K 50 \
+    --rollout_length 8 \
+    --policy_img_size 96 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
+    --seed 42 \
+    --device cuda &
+  PID2=\$!
+  python evaluate_policy.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --policy_model_name lerobot/diffusion_pusht \
+    --n_eval 10000 \
+    --K 50 \
     --rollout_length 10 \
     --policy_img_size 96 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42
-  python evaluate_policy.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --policy_model_name lerobot/diffusion_pusht \
-    --n_eval 10000 \
-    --K 50 \
-    --rollout_length 20 \
-    --policy_img_size 96 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42
-  python evaluate_policy.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --policy_model_name lerobot/diffusion_pusht \
-    --n_eval 10000 \
-    --K 50 \
-    --rollout_length 40 \
-    --policy_img_size 96 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42
+    --seed 42 \
+    --device cuda &
+  PID3=\$!
+  wait \$PID1 || exit 1
+  wait \$PID2 || exit 1
+  wait \$PID3 || exit 1
 "

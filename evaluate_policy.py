@@ -450,7 +450,7 @@ def sample_valid_trajectory(dset, rollout_length, frameskip, n_past, rng):
 # ---------------------------------------------------------------------------
 
 def evaluate_policy_main(cfg):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(cfg.device)
     seed(cfg.seed)
     rng = np.random.RandomState(cfg.seed)
 
@@ -623,6 +623,8 @@ def parse_args():
                              "Use 1 for fresh inference at every step. Default: use policy's trained value.")
     parser.add_argument("--verbose_actions", action="store_true",
                         help="Print per-step action values for every trajectory (default: first only)")
+    parser.add_argument("--device", default="cuda",
+                        help="Torch device to use (default: cuda)")
     return parser.parse_args()
 
 

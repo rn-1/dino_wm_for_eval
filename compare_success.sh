@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --job-name=compare_success
 #SBATCH --output=compare_success.out
 #SBATCH --error=compare_success.err

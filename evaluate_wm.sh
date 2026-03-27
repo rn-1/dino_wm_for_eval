@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --job-name=evaluate_wm
 #SBATCH --output=evaluate_wm.out
 #SBATCH --error=evaluate_wm.err
@@ -67,34 +67,28 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --model_epoch latest \
     --n_eval 10000 \
     --batch_size 8 \
+    --rollout_length 5 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
+    --seed 42 \
+    --device cuda
+  python evaluate_wm.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --n_eval 10000 \
+    --batch_size 8 \
+    --rollout_length 8 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
+    --seed 42 \
+    --device cuda
+  python evaluate_wm.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --n_eval 10000 \
+    --batch_size 8 \
     --rollout_length 10 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
-    --seed 42
-  python evaluate_wm.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --n_eval 10000 \
-    --batch_size 8 \
-    --rollout_length 20 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
-    --seed 42
-  python evaluate_wm.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --n_eval 10000 \
-    --batch_size 8 \
-    --rollout_length 20 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
-    --seed 42
-  python evaluate_wm.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --n_eval 10000 \
-    --batch_size 8 \
-    --rollout_length 40 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \
-    --seed 42
+    --seed 42 \
+    --device cuda
 "

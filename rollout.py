@@ -830,7 +830,7 @@ def rollout_main(cfg_dict):
     into per-length subdirectories rl{N}/ under saved_folder.
     """
     base_output_dir = cfg_dict["saved_folder"]
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device(cfg_dict.get("device", "cuda"))
 
     if cfg_dict.get("wandb_logging", False):
         wandb_run = wandb.init(
