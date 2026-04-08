@@ -61,7 +61,7 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export CPATH=/usr/include/x86_64-linux-gnu:${CPATH:-}
   export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}
   export HF_HOME=/project2/jessetho_1732/rl_eval_wm/dino_wm/.hf_cache
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
   export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
   export TRANSFORMERS_CACHE=\$HF_HOME/transformers
   export TORCH_HOME=\$HF_HOME

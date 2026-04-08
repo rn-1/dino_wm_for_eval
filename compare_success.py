@@ -45,7 +45,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rollout import _load_model, _load_dataset_with_legacy_target_fallback
-from vlm_judge import load_vlm_judge, judge_frame
+from direct_success_metric import count_green_pixels
 from utils import seed
 
 
@@ -155,14 +155,14 @@ def _save_summary_plot(results, output_dir, model_name, rollout_length):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    gt_rate = results["gt_success_rate"]
-    wm_rate = results["wm_success_rate"]
+    gt_rate = results["gt_mean_score"]
+    wm_rate = results["wm_mean_score"]
     agree_rate = results["agreement_rate"]
     n = results["n_eval"]
 
     fig, ax = plt.subplots(figsize=(6, 4))
     bars = ax.bar(
-        ["GT success", "WM success", "Agreement"],
+        ["GT score", "WM score", "Agreement"],
         [gt_rate, wm_rate, agree_rate],
         color=["steelblue", "darkorange", "seagreen"],
         width=0.5,
@@ -172,12 +172,12 @@ def _save_summary_plot(results, output_dir, model_name, rollout_length):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.01,
-            f"{val:.1%}",
+            f"{val:.3f}",
             ha="center", va="bottom", fontsize=11,
         )
-    ax.set_ylim(0, 1.1)
-    ax.set_ylabel("Rate")
-    ax.set_title(f"{model_name} — VLM-judged success (rl={rollout_length}, n={n})")
+    ax.set_ylim(0, max(1.1, gt_rate * 1.1, wm_rate * 1.1))
+    ax.set_ylabel("Score / Rate")
+    ax.set_title(f"{model_name} — green-pixel success score (rl={rollout_length}, n={n})")
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
 
@@ -282,19 +282,6 @@ def compare_success_main(cfg):
     print(f"\nWorld model '{cfg.model_name}' (epoch={cfg.model_epoch})")
     print(f"  rollout_length={rollout_length}, frameskip={frameskip}, num_hist={num_hist}")
 
-    # ── VLM judge ─────────────────────────────────────────────────────────
-    vlm_processor, vlm_model = load_vlm_judge(
-        model_name=cfg.vlm_model_name,
-        device=device,
-        hf_cache_dir=os.path.join(cfg.ckpt_base_path, ".hf_cache"),
-        local_files_only=cfg.local_files_only,
-    )
-    if vlm_model is None:
-        tee.close()
-        raise RuntimeError("VLM judge failed to load.")
-
-    task_prompt = cfg.task_prompt
-    print(f"\nTask prompt: \"{task_prompt}\"")
     print(f"Running {cfg.n_eval} evaluations ...\n")
 
     # ── Rollout output directory ──────────────────────────────────────────
@@ -320,54 +307,50 @@ def compare_success_main(cfg):
             base = os.path.join(rollouts_dir, f"traj_{i:03d}")
             _save_rollout_outputs(gt_frames, pred_frames, base, fps=cfg.video_fps)
 
-        # Final frames for VLM judging
-        gt_final  = gt_frames[-1]    # (C, H, W) in [-1, 1]
-        wm_final  = pred_frames[-1]  # (C, H, W) in [-1, 1]
+        # Green-pixel ratio: count_final / count_first for GT and WM trajectories
+        gt_first_np = _to_hwc_uint8(gt_frames[0])
+        gt_final_np = _to_hwc_uint8(gt_frames[-1])
+        wm_first_np = _to_hwc_uint8(pred_frames[0])
+        wm_final_np = _to_hwc_uint8(pred_frames[-1])
 
-        gt_result = judge_frame(vlm_processor, vlm_model, gt_final,  task_prompt, device=device)
-        wm_result = judge_frame(vlm_processor, vlm_model, wm_final, task_prompt, device=device)
-
-        gt_success = gt_result["success"]
-        wm_success = wm_result["success"]
-        agree      = gt_success == wm_success
+        gt_score = count_green_pixels(gt_final_np) / max(count_green_pixels(gt_first_np), 1)
+        wm_score = count_green_pixels(wm_final_np) / max(count_green_pixels(wm_first_np), 1)
+        agree    = abs(gt_score - wm_score) < cfg.agreement_tol
 
         records.append({
-            "traj_idx":       i,
-            "gt_success":     gt_success,
-            "wm_success":     wm_success,
-            "agreement":      agree,
-            "gt_response":    gt_result["raw_response"],
-            "wm_response":    wm_result["raw_response"],
+            "traj_idx":  i,
+            "gt_score":  gt_score,
+            "wm_score":  wm_score,
+            "agreement": agree,
         })
 
-        if gt_success and not wm_success:
+        if gt_score > cfg.success_threshold and wm_score <= cfg.success_threshold:
             disagreements.append((i, gt_frames, pred_frames))
 
         print(
             f"  [{i+1:3d}/{cfg.n_eval}]  "
-            f"GT: {'✓' if gt_success else '✗'} ({gt_result['raw_response'][:40]!r})  "
-            f"WM: {'✓' if wm_success else '✗'} ({wm_result['raw_response'][:40]!r})  "
+            f"GT: {gt_score:.3f}  WM: {wm_score:.3f}  "
             f"{'AGREE' if agree else 'DISAGREE'}"
         )
 
     # ── Aggregate ─────────────────────────────────────────────────────────
     n = len(records)
-    gt_success_rate = sum(r["gt_success"] for r in records) / n
-    wm_success_rate = sum(r["wm_success"] for r in records) / n
-    agreement_rate  = sum(r["agreement"]  for r in records) / n
+    gt_mean_score  = sum(r["gt_score"] for r in records) / n
+    wm_mean_score  = sum(r["wm_score"] for r in records) / n
+    agreement_rate = sum(r["agreement"] for r in records) / n
 
-    # Rates conditioned on GT outcome
-    gt_pos = [r for r in records if r["gt_success"]]
-    gt_neg = [r for r in records if not r["gt_success"]]
-    wm_given_gt_pos = sum(r["wm_success"] for r in gt_pos) / len(gt_pos) if gt_pos else float("nan")
-    wm_given_gt_neg = sum(r["wm_success"] for r in gt_neg) / len(gt_neg) if gt_neg else float("nan")
+    # Scores conditioned on GT outcome
+    gt_pos = [r for r in records if r["gt_score"] > cfg.success_threshold]
+    gt_neg = [r for r in records if r["gt_score"] <= cfg.success_threshold]
+    wm_given_gt_pos = sum(r["wm_score"] for r in gt_pos) / len(gt_pos) if gt_pos else float("nan")
+    wm_given_gt_neg = sum(r["wm_score"] for r in gt_neg) / len(gt_neg) if gt_neg else float("nan")
 
-    print(f"\n=== VLM Success Comparison (rl={rollout_length}) ===")
-    print(f"  GT success rate         : {gt_success_rate:.3f}  ({sum(r['gt_success'] for r in records)}/{n})")
-    print(f"  WM success rate         : {wm_success_rate:.3f}  ({sum(r['wm_success'] for r in records)}/{n})")
-    print(f"  Agreement rate          : {agreement_rate:.3f}")
-    print(f"  WM success | GT success : {wm_given_gt_pos:.3f}  (n={len(gt_pos)})")
-    print(f"  WM success | GT failure : {wm_given_gt_neg:.3f}  (n={len(gt_neg)})")
+    print(f"\n=== Green-Pixel Success Comparison (rl={rollout_length}) ===")
+    print(f"  GT mean score           : {gt_mean_score:.3f}")
+    print(f"  WM mean score           : {wm_mean_score:.3f}")
+    print(f"  Agreement rate          : {agreement_rate:.3f}  (tol={cfg.agreement_tol})")
+    print(f"  WM score | GT success   : {wm_given_gt_pos:.3f}  (n={len(gt_pos)})")
+    print(f"  WM score | GT failure   : {wm_given_gt_neg:.3f}  (n={len(gt_neg)})")
 
     # ── Save disagreement grids ───────────────────────────────────────────
     if disagreements:
@@ -379,25 +362,25 @@ def compare_success_main(cfg):
                 gt_f, wm_f,
                 gt_success=True, wm_success=False,
                 out_path=out_img,
-                title=f"Traj {traj_i} — GT ✓  WM ✗  |  {task_prompt[:60]}",
+                title=f"Traj {traj_i} — GT score: {records[traj_i]['gt_score']:.3f}  WM score: {records[traj_i]['wm_score']:.3f}",
             )
         print(f"\nSaved {min(len(disagreements), cfg.n_save_examples)} "
               f"disagreement grids to: {dis_dir}/")
 
     # ── Save summary plot ─────────────────────────────────────────────────
     agg = {
-        "model_name":        cfg.model_name,
-        "model_epoch":       cfg.model_epoch,
-        "vlm_model_name":    cfg.vlm_model_name,
-        "task_prompt":       task_prompt,
-        "n_eval":            n,
-        "rollout_length":    rollout_length,
-        "frameskip":         frameskip,
-        "gt_success_rate":   gt_success_rate,
-        "wm_success_rate":   wm_success_rate,
-        "agreement_rate":    agreement_rate,
-        "wm_success_given_gt_success": wm_given_gt_pos,
-        "wm_success_given_gt_failure": wm_given_gt_neg,
+        "model_name":                  cfg.model_name,
+        "model_epoch":                 cfg.model_epoch,
+        "n_eval":                      n,
+        "rollout_length":              rollout_length,
+        "frameskip":                   frameskip,
+        "success_threshold":           cfg.success_threshold,
+        "agreement_tol":               cfg.agreement_tol,
+        "gt_mean_score":               gt_mean_score,
+        "wm_mean_score":               wm_mean_score,
+        "agreement_rate":              agreement_rate,
+        "wm_score_given_gt_success":   wm_given_gt_pos,
+        "wm_score_given_gt_failure":   wm_given_gt_neg,
     }
     _save_summary_plot(agg, cfg.output_dir, cfg.model_name, rollout_length)
 
@@ -429,12 +412,10 @@ def parse_args():
                         help="Number of trajectories to evaluate (default: 100)")
     parser.add_argument("--rollout_length", type=int, default=10,
                         help="WM rollout steps per trajectory (default: 10)")
-    parser.add_argument("--task_prompt", default="Push the T block to the goal position.",
-                        help="Language description of the task for the VLM judge.")
-    parser.add_argument("--vlm_model_name", default="Qwen/Qwen3-VL-4B-Instruct",
-                        help="HuggingFace VLM model ID (default: Qwen/Qwen3-VL-4B-Instruct)")
-    parser.add_argument("--local_files_only", action="store_true",
-                        help="Do not contact HuggingFace (requires cached weights).")
+    parser.add_argument("--success_threshold", type=float, default=1.0,
+                        help="Green-pixel ratio above which GT is counted as a success (default: 1.0)")
+    parser.add_argument("--agreement_tol", type=float, default=0.2,
+                        help="Max |gt_score - wm_score| to count as agreement (default: 0.2)")
     parser.add_argument("--output_dir", default="./eval_results/compare_success",
                         help="Directory for JSON, plots, and example images.")
     parser.add_argument("--n_save_examples", type=int, default=10,

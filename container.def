@@ -1,0 +1,71 @@
+Bootstrap: docker
+From: nvidia/cuda:12.9.0-cudnn-runtime-ubuntu22.04
+
+%files
+    /project2/jessetho_1732/rl_eval_wm/dino_wm/environment.yaml /opt/environment.yaml
+    /project2/jessetho_1732/rl_eval_wm/dino_wm/env_requirements.txt /opt/env_requirements.txt
+
+%post
+    set -eux
+
+    apt-get update && apt-get install -y \
+        curl bzip2 ca-certificates git \
+        libglew-dev libgl1-mesa-glx libosmesa6 libegl1 libglfw3 libglfw3-dev make wget \
+        cmake \
+        build-essential \
+	    patchelf \
+        python3-dev \
+        && rm -rf /var/lib/apt/lists*
+
+    # Create bind-mount point for dino_wm (mounted at runtime with --bind)
+    mkdir -p /project2/jessetho_1732/rl_eval_wm/dino_wm
+
+    # Install micromamba
+    curl -L https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+    mv bin/micromamba /usr/local/bin/micromamba
+
+    # Confirm the yaml is staged
+
+    # Create env
+    export MAMBA_ROOT_PREFIX=/opt/micromamba
+    export CMAKE_CXX_COMPILER=$(which gcc)
+    micromamba create -y -n app -f /opt/environment.yaml
+    micromamba clean -a -y
+
+    micromamba install conda-forge::gcc=14.1.0 conda-forge::gxx=14.1.0
+
+    # Wrap cmake to fix egl_probe build: its CMakeLists.txt uses cmake_minimum_required
+    # with version < 3.5, which CMake 4.x no longer supports without this flag.
+    CMAKE_BIN=/opt/micromamba/envs/app/bin/cmake
+    if [ -f "$CMAKE_BIN" ]; then
+        mv "$CMAKE_BIN" "${CMAKE_BIN}.real"
+        printf '#!/bin/sh\nexec "%s.real" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 "$@"\n' "$CMAKE_BIN" > "$CMAKE_BIN"
+        chmod +x "$CMAKE_BIN"
+    fi
+
+    # Install lerobot into the conda env at build time (as root, site-packages writable).
+    # Must not run at %runscript time: pip would fall back to --user install, which
+    # conda Python ignores (PYTHONNOUSERSITE), causing "No module named lerobot".
+    export PATH=/opt/micromamba/envs/app/bin:$PATH
+    python -m pip install -r /opt/env_requirements.txt --no-cache-dir
+    python -m pip install lerobot 'lerobot[pusht]' --no-cache-dir
+    python -m pip install huggingface_hub==0.35.3 --no-cache-dir
+    python -m pip install "lerobot[pi]@git+https://github.com/huggingface/lerobot.git"
+    python -m pip install "transformers[torch]>=4.39.0" --upgrade
+
+    # Build-time verification: fail image build if decord is not importable from the app env.
+    python -c "import decord; print(decord.__version__)"
+
+%environment
+    export MAMBA_ROOT_PREFIX=/opt/micromamba
+    export PATH=/opt/micromamba/envs/app/bin:$PATH
+    export PYTHONNOUSERSITE=1
+
+    export MUJOCO_PATH=/project2/jessetho_1732/rl_eval_wm/dino_wm/mujoco
+    export LD_LIBRARY_PATH=/project2/jessetho_1732/rl_eval_wm/dino_wm/mujoco:$LD_LIBRARY_PATH
+
+    export DATASET_DIR=/project2/jessetho_1732/rl_eval_wm/dino_wm/data
+    export WANDB_API_KEY="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"
+
+%runscript
+    exec "$@"

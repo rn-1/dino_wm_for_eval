@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:rtxa6000:1
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --time=48:00:00
 #SBATCH --job-name=evaluate_policy
 #SBATCH --output=evaluate_policy.out
@@ -51,7 +51,7 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export PATH=/opt/micromamba/envs/app/bin:/usr/local/bin:/usr/bin:/bin
   export CPATH=/usr/include/x86_64-linux-gnu:${CPATH:-}
   export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
   export HF_HOME=/project2/jessetho_1732/rl_eval_wm/dino_wm/.hf_cache
   export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
   export TRANSFORMERS_CACHE=\$HF_HOME/transformers
@@ -60,6 +60,8 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export TRANSFORMERS_OFFLINE=1
   mkdir -p \"\$HUGGINGFACE_HUB_CACHE\" \"\$TRANSFORMERS_CACHE\"
   pip install -q -U 'cython<3'
+  sed -i 's/field(init=False, metadata=/field(init=False, default=None, metadata=/g' \
+    /opt/micromamba/envs/app/lib/python3.12/site-packages/lerobot/policies/groot/groot_n1.py
   cd /project2/jessetho_1732/rl_eval_wm/dino_wm
   python cache_pusht_model.py
   python evaluate_policy.py \

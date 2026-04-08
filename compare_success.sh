@@ -67,14 +67,15 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export TRANSFORMERS_OFFLINE=1
   mkdir -p \"\$HUGGINGFACE_HUB_CACHE\" \"\$TRANSFORMERS_CACHE\"
   pip install -q -U 'cython<3'
+  sed -i 's/field(init=False, metadata=/field(init=False, default=None, metadata=/g' \
+    /opt/micromamba/envs/app/lib/python3.12/site-packages/lerobot/policies/groot/groot_n1.py
   cd /project2/jessetho_1732/rl_eval_wm/dino_wm
   python compare_success.py \
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 1000 \
+    --n_eval 10 \
     --rollout_length 10 \
-    --task_prompt 'Push the T block to the goal position.' \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
     --save_rollouts \
     --video_fps 4 \
@@ -85,9 +86,8 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 1000 \
+    --n_eval 10 \
     --rollout_length 20 \
-    --task_prompt 'Push the T block to the goal position.' \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
     --save_rollouts \
     --video_fps 4 \
@@ -98,9 +98,8 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 1000 \
+    --n_eval 10 \
     --rollout_length 40 \
-    --task_prompt 'Push the T block to the goal position.' \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
     --save_rollouts \
     --video_fps 4 \
