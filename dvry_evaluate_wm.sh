@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --time=48:00:00
 #SBATCH --job-name=evaluate_wm
 
@@ -57,7 +57,7 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 100 \
+    --n_eval 10000 \
     --batch_size 8 \
     --rollout_length 5 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/wm \

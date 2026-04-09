@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:rtxa6000:1
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --time=48:00:00
 #SBATCH --job-name=compare_success
 #SBATCH --output=compare_success.out
@@ -48,9 +48,9 @@ export WANDB_API_KEY="wandb_v1_HO8m0Jggpzyr1yYFsXg2QcXhda6_XDS0XM3Y3RWe5TCiD4ZAO
 # Cache model weights before entering the apptainer container.
 # The container has no internet access (SSL_CERT_FILE missing), so all
 # downloads must happen here in the conda env where networking works.
-echo "=== Caching model weights (outside apptainer) ==="
-python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_pusht_model.py
-python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_vlm_model.py
+# echo "=== Caching model weights (outside apptainer) ==="
+# python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_pusht_model.py
+# python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_vlm_model.py
 
 # rm -f /scratch1/rnene/dinoenv.sif
 # apptainer build --fakeroot /scratch1/rnene/dinoenv.sif container.def
@@ -58,7 +58,7 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export PATH=/opt/micromamba/envs/app/bin:/usr/local/bin:/usr/bin:/bin
   export CPATH=/usr/include/x86_64-linux-gnu:${CPATH:-}
   export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
   export HF_HOME=/project2/jessetho_1732/rl_eval_wm/dino_wm/.hf_cache
   export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
   export TRANSFORMERS_CACHE=\$HF_HOME/transformers
@@ -74,36 +74,20 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 10 \
+    --n_eval 10000 \
     --rollout_length 10 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
-    --save_rollouts \
     --video_fps 4 \
     --n_save_examples 10 \
-    --local_files_only \
     --seed 42
   python compare_success.py \
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
-    --n_eval 10 \
+    --n_eval 10000 \
     --rollout_length 20 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
-    --save_rollouts \
     --video_fps 4 \
     --n_save_examples 10 \
-    --local_files_only \
-    --seed 42
-  python compare_success.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --n_eval 10 \
-    --rollout_length 40 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success \
-    --save_rollouts \
-    --video_fps 4 \
-    --n_save_examples 10 \
-    --local_files_only \
     --seed 42
 "

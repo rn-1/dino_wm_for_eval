@@ -41,6 +41,19 @@ class PolicyWrapper:
                 return shape[0]
         return None
 
+
+class NoisedPolicyWrapper(PolicyWrapper):
+    def __init__(self, model_name: str = "lerobot/diffusion_pusht", n_action_steps: int = None, noise_scale: float = 0.1):
+        super().__init__(model_name, n_action_steps)
+        self.noise_scale = noise_scale
+
+    def predict(self, observation: torch.Tensor, image: torch.Tensor = torch.zeros(1, 3, 96, 96)) -> torch.Tensor:
+        actions = super().predict(observation, image)
+        noise = self.noise_scale * torch.randn_like(actions) # inject gaussian noise into actions to worsen performance
+        return actions + noise
+
+
+
 def main():
     # Load the policy
     policy = PolicyWrapper(model_name="lerobot/diffusion_pusht")

@@ -48,15 +48,15 @@ _DEFAULT_HF_CACHE = os.path.join(
 
 _SYSTEM_PROMPT = (
     "You are evaluating whether a robot successfully completed a manipulation task. "
-    "Answer only YES or NO."
+    "Answer with ONLY a number between 0.0 and 1.0, where 0.0 means complete failure and 1.0 means perfect success."
+    "This may include numbers such as 0.453 or 0.8, but do not include any text or explanation. "
+    "It is CRITICAL that you follow these instructions and ONLY respond with a number between 0.0 and 1.0, as I will parse your response programmatically."
 )
 
 _USER_PROMPT_TEMPLATE = (
     "Task: {task}\n\n"
     "The image shows the final state of the robot's execution. "
-    "Did the robot successfully complete the task?\n\n"
-    "Answer YES if the task is complete, or NO if it is not. "
-    "Start your response with YES or NO."
+    "Give a score between 0.0 and 1.0 of how successful the robot was at completing the task."
 )
 
 # ---------------------------------------------------------------------------

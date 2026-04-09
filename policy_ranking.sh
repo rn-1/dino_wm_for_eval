@@ -1,13 +1,15 @@
 #!/bin/bash
 
+#SBATCH --partition=nlp_hiprio
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:rtxa6000:1
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
-#SBATCH --job-name=evaluate_policy
+#SBATCH --job-name=policy_ranking
+#SBATCH --output=policy_ranking.out
+#SBATCH --error=policy_ranking.err
 
 set -euo pipefail
 
@@ -36,58 +38,54 @@ export DATASET_DIR="/project2/jessetho_1732/rl_eval_wm/dino_wm/data"
 export HF_HOME="/project2/jessetho_1732/rl_eval_wm/dino_wm/.hf_cache"
 export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
 export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export TORCH_HOME="$HF_HOME"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 mkdir -p "$HUGGINGFACE_HUB_CACHE" "$TRANSFORMERS_CACHE"
 
 export WANDB_API_KEY="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"
 
-# rm -f /scratch1/rnene/dinoenv.sif
-# apptainer build --fakeroot /scratch1/rnene/dinoenv.sif container.def
+# Cache model weights before entering the apptainer container.
+# The container has no internet access (SSL_CERT_FILE missing), so all
+# downloads must happen here in the conda env where networking works.
+# echo "=== Caching model weights (outside apptainer) ==="
+# python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_pusht_model.py
+# python /project2/jessetho_1732/rl_eval_wm/dino_wm/cache_vlm_model.py
+
 apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rnene/dinoenv.sif bash -lc "
   export PATH=/opt/micromamba/envs/app/bin:/usr/local/bin:/usr/bin:/bin
   export CPATH=/usr/include/x86_64-linux-gnu:${CPATH:-}
   export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
+  export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/root/.mujoco/mujoco210/bin
   export HF_HOME=/project2/jessetho_1732/rl_eval_wm/dino_wm/.hf_cache
   export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
   export TRANSFORMERS_CACHE=\$HF_HOME/transformers
+  export TORCH_HOME=\$HF_HOME
+  export HF_HUB_OFFLINE=1
+  export TRANSFORMERS_OFFLINE=1
   mkdir -p \"\$HUGGINGFACE_HUB_CACHE\" \"\$TRANSFORMERS_CACHE\"
   pip install -q -U 'cython<3'
+  sed -i 's/field(init=False, metadata=/field(init=False, default=None, metadata=/g' \
+    /opt/micromamba/envs/app/lib/python3.12/site-packages/lerobot/policies/groot/groot_n1.py
   cd /project2/jessetho_1732/rl_eval_wm/dino_wm
-  python cache_pusht_model.py
-  python evaluate_policy.py \
+  python policy_ranking.py \
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
     --policy_model_name lerobot/diffusion_pusht \
-    --n_eval 20 \
-    --K 50 \
-    --rollout_length 5 \
-    --policy_img_size 96 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42 \
-    --device cuda
-  python evaluate_policy.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --policy_model_name lerobot/diffusion_pusht \
-    --n_eval 20 \
-    --K 50 \
-    --rollout_length 8 \
-    --policy_img_size 96 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42 \
-    --device cuda
-  python evaluate_policy.py \
-    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
-    --model_name pusht \
-    --model_epoch latest \
-    --policy_model_name lerobot/diffusion_pusht \
-    --n_eval 20 \
-    --K 50 \
+    --noise_levels 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --n_eval 1000 \
     --rollout_length 10 \
-    --policy_img_size 96 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy \
-    --seed 42 \
-    --device cuda
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy_ranking \
+    --seed 42
+  python policy_ranking.py \
+    --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
+    --model_name pusht \
+    --model_epoch latest \
+    --policy_model_name lerobot/diffusion_pusht \
+    --noise_levels 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --n_eval 1000 \
+    --rollout_length 20 \
+    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy_ranking \
+    --seed 42
 "

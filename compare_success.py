@@ -187,6 +187,36 @@ def _save_summary_plot(results, output_dir, model_name, rollout_length):
     print(f"Saved summary plot: {out_path}")
 
 
+def _save_scatter_plot(gt_scores, wm_scores, spearman_corr, spearman_pval,
+                       output_dir, model_name, rollout_length):
+    """Scatter plot of per-trajectory GT score (x) vs WM score (y)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(gt_scores, wm_scores, alpha=0.6, edgecolors="white", linewidths=0.5,
+               color="steelblue", s=40)
+    lim = max(max(gt_scores, default=1), max(wm_scores, default=1)) * 1.05
+    ax.plot([0, lim], [0, lim], "k--", linewidth=0.8, alpha=0.4, label="y = x")
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_xlabel("GT score")
+    ax.set_ylabel("WM score")
+    ax.set_title(
+        f"{model_name} — GT vs WM score (rl={rollout_length})\n"
+        f"Spearman r = {spearman_corr:.3f}  (p = {spearman_pval:.2e})"
+    )
+    ax.legend(fontsize=8)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+
+    out_path = os.path.join(output_dir, f"scatter_rl{rollout_length}.png")
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"Saved scatter plot: {out_path}")
+
+
 # ---------------------------------------------------------------------------
 # Rollout
 # ---------------------------------------------------------------------------
@@ -257,7 +287,7 @@ def compare_success_main(cfg):
     rng = np.random.RandomState(cfg.seed)
 
     os.makedirs(cfg.output_dir, exist_ok=True)
-    tee = Tee(os.path.join(cfg.output_dir, "compare_success.log"))
+    tee = Tee(os.path.join(cfg.output_dir, f"compare_success_rl{cfg.rollout_length}.log"))
 
     # ── World model ───────────────────────────────────────────────────────
     model_path = Path(cfg.ckpt_base_path) / "outputs" / cfg.model_name
@@ -302,20 +332,24 @@ def compare_success_main(cfg):
             wm, obs, act, frameskip, num_hist, rollout_length, device
         )
 
-        # Save rollout videos and arrays
-        if rollouts_dir is not None:
-            base = os.path.join(rollouts_dir, f"traj_{i:03d}")
-            _save_rollout_outputs(gt_frames, pred_frames, base, fps=cfg.video_fps)
-
-        # Green-pixel ratio: count_final / count_first for GT and WM trajectories
+        # Success metric: 1 - (green-pixel ratio). Lower green pixels = higher success.
         gt_first_np = _to_hwc_uint8(gt_frames[0])
         gt_final_np = _to_hwc_uint8(gt_frames[-1])
-        wm_first_np = _to_hwc_uint8(pred_frames[0])
         wm_final_np = _to_hwc_uint8(pred_frames[-1])
 
-        gt_score = count_green_pixels(gt_final_np) / max(count_green_pixels(gt_first_np), 1)
-        wm_score = count_green_pixels(wm_final_np) / max(count_green_pixels(wm_first_np), 1)
-        agree    = abs(gt_score - wm_score) < cfg.agreement_tol
+        # Use the GT first frame as the shared denominator for both scores so
+        # that the WM score is not penalised by the decoder's lossy reconstruction
+        # of the initial frame (which may show fewer green pixels than the real GT).
+        gt_first_green = max(count_green_pixels(gt_first_np), 1)
+        gt_score = max(0.0, 1.0 - (count_green_pixels(gt_final_np) / gt_first_green))
+        wm_score = max(0.0, 1.0 - (count_green_pixels(wm_final_np) / gt_first_green))
+        disagree = abs(gt_score - wm_score)
+        agree    = disagree < cfg.agreement_tol
+
+        # Save rollout only when disagreement is high enough to be interesting.
+        if rollouts_dir is not None and disagree >= cfg.save_rollout_tol:
+            base = os.path.join(rollouts_dir, f"traj_{i:03d}_gt{gt_score:.2f}_wm{wm_score:.2f}")
+            _save_rollout_outputs(gt_frames, pred_frames, base, fps=cfg.video_fps)
 
         records.append({
             "traj_idx":  i,
@@ -345,12 +379,19 @@ def compare_success_main(cfg):
     wm_given_gt_pos = sum(r["wm_score"] for r in gt_pos) / len(gt_pos) if gt_pos else float("nan")
     wm_given_gt_neg = sum(r["wm_score"] for r in gt_neg) / len(gt_neg) if gt_neg else float("nan")
 
+    # Spearman correlation
+    from scipy.stats import spearmanr
+    gt_scores_arr = [r["gt_score"] for r in records]
+    wm_scores_arr = [r["wm_score"] for r in records]
+    spearman_corr, spearman_pval = spearmanr(gt_scores_arr, wm_scores_arr)
+
     print(f"\n=== Green-Pixel Success Comparison (rl={rollout_length}) ===")
     print(f"  GT mean score           : {gt_mean_score:.3f}")
     print(f"  WM mean score           : {wm_mean_score:.3f}")
     print(f"  Agreement rate          : {agreement_rate:.3f}  (tol={cfg.agreement_tol})")
     print(f"  WM score | GT success   : {wm_given_gt_pos:.3f}  (n={len(gt_pos)})")
     print(f"  WM score | GT failure   : {wm_given_gt_neg:.3f}  (n={len(gt_neg)})")
+    print(f"  Spearman correlation    : {spearman_corr:.3f}  (p={spearman_pval:.3e})")
 
     # ── Save disagreement grids ───────────────────────────────────────────
     if disagreements:
@@ -367,6 +408,12 @@ def compare_success_main(cfg):
         print(f"\nSaved {min(len(disagreements), cfg.n_save_examples)} "
               f"disagreement grids to: {dis_dir}/")
 
+    # ── Save scatter plot ─────────────────────────────────────────────────
+    _save_scatter_plot(
+        gt_scores_arr, wm_scores_arr, spearman_corr, spearman_pval,
+        cfg.output_dir, cfg.model_name, rollout_length,
+    )
+
     # ── Save summary plot ─────────────────────────────────────────────────
     agg = {
         "model_name":                  cfg.model_name,
@@ -381,6 +428,8 @@ def compare_success_main(cfg):
         "agreement_rate":              agreement_rate,
         "wm_score_given_gt_success":   wm_given_gt_pos,
         "wm_score_given_gt_failure":   wm_given_gt_neg,
+        "spearman_corr":               spearman_corr,
+        "spearman_pval":               spearman_pval,
     }
     _save_summary_plot(agg, cfg.output_dir, cfg.model_name, rollout_length)
 
@@ -421,7 +470,9 @@ def parse_args():
     parser.add_argument("--n_save_examples", type=int, default=10,
                         help="Max disagreement grids to save (default: 10)")
     parser.add_argument("--save_rollouts", action="store_true",
-                        help="Save GT and WM frames as .mp4 videos and .npy arrays.")
+                        help="Save GT and WM frames as .mp4 videos and .npy arrays for high-disagreement trajectories.")
+    parser.add_argument("--save_rollout_tol", type=float, default=0.3,
+                        help="Min |gt_score - wm_score| to trigger rollout saving (default: 0.3).")
     parser.add_argument("--video_fps", type=int, default=4,
                         help="FPS for saved rollout videos (default: 4)")
     parser.add_argument("--seed", type=int, default=42)
