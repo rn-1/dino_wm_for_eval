@@ -193,12 +193,22 @@ def _save_scatter_plot(gt_scores, wm_scores, spearman_corr, spearman_pval,
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from scipy.stats import linregress
 
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.scatter(gt_scores, wm_scores, alpha=0.6, edgecolors="white", linewidths=0.5,
                color="steelblue", s=40)
     lim = max(max(gt_scores, default=1), max(wm_scores, default=1)) * 1.05
     ax.plot([0, lim], [0, lim], "k--", linewidth=0.8, alpha=0.4, label="y = x")
+
+    # Linear regression
+    if len(gt_scores) >= 2:
+        slope, intercept, r_value, lr_pval, _ = linregress(gt_scores, wm_scores)
+        x_fit = np.array([0, lim])
+        y_fit = slope * x_fit + intercept
+        ax.plot(x_fit, y_fit, "r-", linewidth=1.5,
+                label=f"OLS: y={slope:.2f}x+{intercept:.2f}  (R²={r_value**2:.3f})")
+
     ax.set_xlim(0, lim)
     ax.set_ylim(0, lim)
     ax.set_xlabel("GT score")

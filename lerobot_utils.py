@@ -53,6 +53,16 @@ class NoisedPolicyWrapper(PolicyWrapper):
         return actions + noise
 
 
+class InhibitedPolicyWrapper(PolicyWrapper):
+    def __init__(self, model_name: str = "lerobot/diffusion_pusht", n_action_steps: int = None, inhibition_coeff: float = None):
+        super().__init__(model_name, n_action_steps)
+        self.inhibition_coeff = inhibition_coeff
+
+    def predict(self, observation: torch.Tensor, image: torch.Tensor = torch.zeros(1, 3, 96, 96)) -> torch.Tensor:
+        actions = super().predict(observation, image)
+        if self.inhibition_coeff is not None:
+            return actions * self.inhibition_coeff
+        return actions
 
 def main():
     # Load the policy

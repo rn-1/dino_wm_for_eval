@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-policy_ranking.py — Rank noised policies using the world model as a simulator.
+policy_ranking.py — Rank inhibited policies using the world model as a simulator.
 
-For each noise level σ, wraps the base diffusion policy in NoisedPolicyWrapper(σ),
-generates actions from GT observations, runs those actions open-loop through the
-world model, measures success on the final decoded frame using the green-pixel
-metric, and plots average success vs noise level.
+For each inhibition coefficient c, wraps the base diffusion policy in
+InhibitedPolicyWrapper(c), generates actions from GT observations, runs those
+actions open-loop through the world model, measures success on the final decoded
+frame using the green-pixel metric, and plots average success vs inhibition coeff.
 
 Usage:
     python policy_ranking.py \\
@@ -14,7 +14,7 @@ Usage:
         --model_epoch latest \\
         --n_eval 100 \\
         --rollout_length 10 \\
-        --noise_levels 0.0 0.1 0.2 0.5 1.0 2.0 \\
+        --inhibition_coeffs 0.0 0.2 0.4 0.6 0.8 1.0 \\
         --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy_ranking \\
         --seed 42
 """
@@ -41,7 +41,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rollout import _load_model, _load_dataset_with_legacy_target_fallback
-from lerobot_utils import NoisedPolicyWrapper
+from lerobot_utils import InhibitedPolicyWrapper
 from direct_success_metric import count_green_pixels
 from utils import seed
 
@@ -208,8 +208,8 @@ def run_policy_wm_rollout(
 # Per-noise-level evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_noise_level(
-    noise_scale: float,
+def evaluate_inhibition_level(
+    inhibition_coeff: float,
     wm,
     dset,
     frameskip: int,
@@ -223,12 +223,12 @@ def evaluate_noise_level(
     verbose: bool = True,
 ) -> dict:
     """
-    Run n_eval WM rollouts with a NoisedPolicy at the given noise_scale and
+    Run n_eval WM rollouts with an InhibitedPolicy at the given inhibition_coeff and
     return per-trajectory scores plus the mean success score.
     """
-    policy = NoisedPolicyWrapper(
+    policy = InhibitedPolicyWrapper(
         model_name=policy_model_name,
-        noise_scale=noise_scale,
+        inhibition_coeff=inhibition_coeff,
     )
 
     scores = []
@@ -248,34 +248,34 @@ def evaluate_noise_level(
 
         if verbose:
             print(
-                f"  σ={noise_scale:.3f}  [{i+1:3d}/{n_eval}]  "
+                f"  c={inhibition_coeff:.3f}  [{i+1:3d}/{n_eval}]  "
                 f"WM score: {wm_score:.3f}"
             )
 
     mean_score = float(np.mean(scores))
     std_score  = float(np.std(scores))
-    return {"noise_scale": noise_scale, "scores": scores, "mean": mean_score, "std": std_score}
+    return {"inhibition_coeff": inhibition_coeff, "scores": scores, "mean": mean_score, "std": std_score}
 
 
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
-def save_ranking_plot(results_by_noise, output_dir, model_name, rollout_length):
+def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length):
     """
-    Bar + error-bar plot of mean success score vs noise level.
+    Bar + error-bar plot of mean success score vs inhibition coefficient.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    noise_levels = [r["noise_scale"] for r in results_by_noise]
-    means        = [r["mean"]        for r in results_by_noise]
-    stds         = [r["std"]         for r in results_by_noise]
-    n_eval       = len(results_by_noise[0]["scores"]) if results_by_noise else 0
+    coeffs = [r["inhibition_coeff"] for r in results_by_coeff]
+    means  = [r["mean"]             for r in results_by_coeff]
+    stds   = [r["std"]              for r in results_by_coeff]
+    n_eval = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    x = np.arange(len(noise_levels))
+    x = np.arange(len(coeffs))
     bars = ax.bar(x, means, yerr=stds, capsize=4,
                   color="steelblue", edgecolor="white", width=0.6,
                   error_kw={"ecolor": "black", "elinewidth": 1.2})
@@ -287,10 +287,10 @@ def save_ranking_plot(results_by_noise, output_dir, model_name, rollout_length):
             ha="center", va="bottom", fontsize=9,
         )
     ax.set_xticks(x)
-    ax.set_xticklabels([f"σ={σ}" for σ in noise_levels], rotation=30, ha="right")
+    ax.set_xticklabels([f"c={c}" for c in coeffs], rotation=30, ha="right")
     ax.set_ylabel("Mean WM success score")
     ax.set_title(
-        f"{model_name} — WM success vs policy noise (rl={rollout_length}, n={n_eval})"
+        f"{model_name} — WM success vs inhibition coeff (rl={rollout_length}, n={n_eval})"
     )
     ax.set_ylim(0, max(max(means) * 1.2, 0.1))
     ax.grid(axis="y", linestyle="--", alpha=0.5)
@@ -303,24 +303,24 @@ def save_ranking_plot(results_by_noise, output_dir, model_name, rollout_length):
     return out_path
 
 
-def save_line_plot(results_by_noise, output_dir, model_name, rollout_length):
+def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length):
     """
-    Line plot with shaded ±1 std band: success score vs noise level.
+    Line plot with shaded ±1 std band: success score vs inhibition coefficient.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    noise_levels = np.array([r["noise_scale"] for r in results_by_noise])
-    means        = np.array([r["mean"]        for r in results_by_noise])
-    stds         = np.array([r["std"]         for r in results_by_noise])
-    n_eval       = len(results_by_noise[0]["scores"]) if results_by_noise else 0
+    coeffs = np.array([r["inhibition_coeff"] for r in results_by_coeff])
+    means  = np.array([r["mean"]             for r in results_by_coeff])
+    stds   = np.array([r["std"]              for r in results_by_coeff])
+    n_eval = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(noise_levels, means, marker="o", color="steelblue", linewidth=2, label="mean score")
-    ax.fill_between(noise_levels, means - stds, means + stds,
+    ax.plot(coeffs, means, marker="o", color="steelblue", linewidth=2, label="mean score")
+    ax.fill_between(coeffs, means - stds, means + stds,
                     alpha=0.25, color="steelblue", label="±1 std")
-    ax.set_xlabel("Policy noise scale (σ)")
+    ax.set_xlabel("Inhibition coefficient (c)")
     ax.set_ylabel("Mean WM success score")
     ax.set_title(
         f"{model_name} — Policy ranking via WM (rl={rollout_length}, n={n_eval})"
@@ -370,15 +370,15 @@ def policy_ranking_main(cfg):
     print(f"\nWorld model '{cfg.model_name}' (epoch={cfg.model_epoch})")
     print(f"  rollout_length={cfg.rollout_length}, frameskip={frameskip}, num_hist={num_hist}")
     print(f"  Policy: {cfg.policy_model_name}")
-    print(f"  Noise levels: {cfg.noise_levels}")
+    print(f"  Inhibition coefficients: {cfg.inhibition_coeffs}")
     print(f"  n_eval per level: {cfg.n_eval}\n")
 
-    # ── Sweep over noise levels ───────────────────────────────────────────
-    results_by_noise = []
-    for noise_scale in cfg.noise_levels:
-        print(f"\n=== Noise scale σ={noise_scale:.3f} ===")
-        result = evaluate_noise_level(
-            noise_scale=noise_scale,
+    # ── Sweep over inhibition coefficients ───────────────────────────────
+    results_by_coeff = []
+    for inhibition_coeff in cfg.inhibition_coeffs:
+        print(f"\n=== Inhibition coeff c={inhibition_coeff:.3f} ===")
+        result = evaluate_inhibition_level(
+            inhibition_coeff=inhibition_coeff,
             wm=wm,
             dset=dset,
             frameskip=frameskip,
@@ -391,38 +391,38 @@ def policy_ranking_main(cfg):
             rng=rng,
             verbose=True,
         )
-        results_by_noise.append(result)
+        results_by_coeff.append(result)
         print(
             f"  → mean={result['mean']:.4f}  std={result['std']:.4f}"
         )
 
     # ── Summary ───────────────────────────────────────────────────────────
     print("\n=== Policy Ranking Summary ===")
-    print(f"{'σ':>8}  {'mean score':>12}  {'std':>8}")
+    print(f"{'c':>8}  {'mean score':>12}  {'std':>8}")
     print("-" * 34)
-    for r in results_by_noise:
-        print(f"{r['noise_scale']:>8.3f}  {r['mean']:>12.4f}  {r['std']:>8.4f}")
+    for r in results_by_coeff:
+        print(f"{r['inhibition_coeff']:>8.3f}  {r['mean']:>12.4f}  {r['std']:>8.4f}")
 
     # ── Save plots ────────────────────────────────────────────────────────
-    save_ranking_plot(results_by_noise, cfg.output_dir, cfg.model_name, cfg.rollout_length)
-    save_line_plot(results_by_noise, cfg.output_dir, cfg.model_name, cfg.rollout_length)
+    save_ranking_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length)
+    save_line_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length)
 
     # ── Save JSON ─────────────────────────────────────────────────────────
     summary = {
-        "model_name":       cfg.model_name,
-        "model_epoch":      cfg.model_epoch,
-        "rollout_length":   cfg.rollout_length,
-        "n_eval":           cfg.n_eval,
-        "policy_model_name": cfg.policy_model_name,
-        "noise_levels":     cfg.noise_levels,
+        "model_name":         cfg.model_name,
+        "model_epoch":        cfg.model_epoch,
+        "rollout_length":     cfg.rollout_length,
+        "n_eval":             cfg.n_eval,
+        "policy_model_name":  cfg.policy_model_name,
+        "inhibition_coeffs":  cfg.inhibition_coeffs,
         "results": [
-            {"noise_scale": r["noise_scale"], "mean": r["mean"], "std": r["std"]}
-            for r in results_by_noise
+            {"inhibition_coeff": r["inhibition_coeff"], "mean": r["mean"], "std": r["std"]}
+            for r in results_by_coeff
         ],
     }
     out_json = os.path.join(cfg.output_dir, f"policy_ranking_rl{cfg.rollout_length}.json")
     with open(out_json, "w") as f:
-        json.dump({"summary": summary, "per_trajectory": results_by_noise}, f, indent=2)
+        json.dump({"summary": summary, "per_trajectory": results_by_coeff}, f, indent=2)
     print(f"\nResults saved to: {out_json}")
     tee.close()
 
@@ -447,9 +447,9 @@ def parse_args():
                         help="LeRobot policy model name (default: lerobot/diffusion_pusht)")
     parser.add_argument("--policy_img_size", type=int, default=96,
                         help="Image size expected by the policy (default: 96)")
-    parser.add_argument("--noise_levels", type=float, nargs="+",
-                        default=[0.0, 0.1, 0.2, 0.5, 1.0, 2.0],
-                        help="List of Gaussian noise scales to evaluate (default: 0.0 0.1 0.2 0.5 1.0 2.0)")
+    parser.add_argument("--inhibition_coeffs", type=float, nargs="+",
+                        default=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                        help="List of inhibition coefficients to evaluate (default: 0.0 0.2 0.4 0.6 0.8 1.0)")
     parser.add_argument("--n_eval", type=int, default=100,
                         help="Number of trajectories to evaluate per noise level (default: 100)")
     parser.add_argument("--rollout_length", type=int, default=10,

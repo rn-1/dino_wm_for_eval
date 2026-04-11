@@ -11,6 +11,8 @@
 #SBATCH --output=train_robomimic.out
 #SBATCH --error=train_robomimic.err
 
+echo SCRIPT START $(date)
+
 set -euo pipefail
 
 module purge
