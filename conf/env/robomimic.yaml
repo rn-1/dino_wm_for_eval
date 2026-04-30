@@ -1,13 +1,5 @@
-# conf/env/robomimic.yaml
-# Environment config for Robomimic tasks (e.g. Lift, Can, Square).
-# Drop this into a dino_wm training config via:
-#   defaults:
-#     - env: robomimic
-
 name: robomimic
 
-# Environment construction (used by RobomimicWrapper)
-# args / kwargs are passed when the wrapper is instantiated directly.
 args: []
 kwargs:
   camera_names:
@@ -22,9 +14,7 @@ kwargs:
 dataset:
   _target_: "robomimic_code.dino_datasets.robomimic_dset.load_robomimic_slice_train_val"
 
-  # Path to the Robomimic HDF5 file.
-  # Override via: DATASET_DIR=/my/path or pass directly.
-  data_path: ${oc.env:DATASET_DIR}/robomimic/lift/ph/low_dim_v15.hdf5
+  data_path: ${oc.env:DATASET_DIR}/robomimic/lift/complete.hdf5
 
   camera_names:
     - agentview

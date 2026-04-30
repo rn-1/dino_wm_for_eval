@@ -72,22 +72,15 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   cd /project2/jessetho_1732/rl_eval_wm/dino_wm
   python gym_rollout.py \
     --model_name lerobot/diffusion_pusht \
-    --n_eval 50 \
+    --n_eval 1 \
     --rollout_length 10 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/gym_rollout \
     --n_save_examples 10 \
     --seed 42
   python gym_rollout.py \
     --model_name lerobot/diffusion_pusht \
-    --n_eval 50 \
+    --n_eval 1 \
     --rollout_length 20 \
-    --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/gym_rollout \
-    --n_save_examples 10 \
-    --seed 42
-  python gym_rollout.py \
-    --model_name lerobot/diffusion_pusht \
-    --n_eval 50 \
-    --rollout_length 40 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/gym_rollout \
     --n_save_examples 10 \
     --seed 42

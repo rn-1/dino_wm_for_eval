@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --partition=nlp_hiprio
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4

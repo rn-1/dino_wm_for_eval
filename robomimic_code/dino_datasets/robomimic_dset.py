@@ -240,7 +240,7 @@ def _get_split_keys(data_path: str, split: str):
 
 def load_robomimic_slice_train_val(
     transform: Optional[Callable] = None,
-    data_path: str = "data/robomimic.hdf5",
+    data_path: str = "data/robomimic/lift/ph/low_dim_v15.hdf5",
     camera_names: Optional[List[str]] = None,
     proprio_keys: Optional[List[str]] = None,
     normalize_action: bool = True,

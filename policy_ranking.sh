@@ -73,19 +73,21 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --model_name pusht \
     --model_epoch latest \
     --policy_model_name lerobot/diffusion_pusht \
-    --noise_levels 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --inhibition_coeffs 0.0 0.1 0.2 0.5 1.0 2.0 \
     --n_eval 1000 \
     --rollout_length 10 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy_ranking \
-    --seed 42
+    --seed 42 \
+    --run_gym
   python policy_ranking.py \
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name pusht \
     --model_epoch latest \
     --policy_model_name lerobot/diffusion_pusht \
-    --noise_levels 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --inhibition_coeffs 0.0 0.1 0.2 0.5 1.0 2.0 \
     --n_eval 1000 \
     --rollout_length 20 \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/policy_ranking \
-    --seed 42
+    --seed 42 \
+    --run_gym
 "

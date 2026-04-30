@@ -205,6 +205,152 @@ def run_policy_wm_rollout(
 
 
 # ---------------------------------------------------------------------------
+# Gym (ground-truth) rollout helpers
+# ---------------------------------------------------------------------------
+
+def _load_pusht_env():
+    """Try to load the PushT gym environment."""
+    try:
+        import gym
+        return gym.make("PushT-v0")
+    except Exception:
+        from env.pusht.pusht_wrapper import PushTWrapper
+        return PushTWrapper()
+
+
+def run_single_gym_episode(
+    policy,
+    env,
+    rollout_length: int,
+    device: torch.device,
+    policy_img_size: int = 96,
+):
+    """
+    Run one episode with *policy* in *env* for up to *rollout_length* steps.
+
+    Returns a list of (C, H, W) float tensors in [-1, 1]:
+        frames[0]  — initial frame
+        frames[-1] — final frame after rollout
+    """
+    reset_result = env.reset()
+    obs = reset_result[0] if isinstance(reset_result, tuple) else reset_result
+
+    frames = []
+
+    for _ in range(rollout_length):
+        # ── extract image & state ─────────────────────────────────────────
+        if isinstance(obs, dict):
+            img = obs.get("image", obs.get("visual", next(iter(obs.values()))))
+            state = obs.get("state", obs.get("proprio", np.zeros(2, dtype=np.float32)))
+        else:
+            img = obs
+            state = np.zeros(2, dtype=np.float32)
+
+        # ── convert to float tensors ──────────────────────────────────────
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img).float()
+        if not isinstance(state, torch.Tensor):
+            state = (torch.from_numpy(state).float()
+                     if isinstance(state, np.ndarray)
+                     else torch.tensor(state, dtype=torch.float32))
+
+        # Ensure (C, H, W)
+        if img.ndim == 2:
+            img = img.unsqueeze(0)
+        elif img.ndim == 3 and img.shape[0] not in (1, 3):
+            img = img.permute(2, 0, 1)
+
+        # Normalise to [-1, 1]
+        if img.max() > 1.5:
+            img = img / 127.5 - 1.0
+
+        frames.append(img.cpu())
+
+        # ── policy action ─────────────────────────────────────────────────
+        img_t = F.interpolate(
+            img.unsqueeze(0).to(device),
+            size=(policy_img_size, policy_img_size),
+            mode="bilinear",
+            align_corners=False,
+        )
+        state_t = state.unsqueeze(0).to(device)
+        with torch.no_grad():
+            action = policy.predict(state_t, img_t)
+        action_np = action.squeeze(0).cpu().numpy()
+
+        # ── step env ──────────────────────────────────────────────────────
+        step_result = env.step(action_np)
+        if len(step_result) == 5:
+            obs, _, terminated, truncated, _ = step_result
+            done = terminated or truncated
+        else:
+            obs, _, done, _ = step_result
+
+        if done:
+            break
+
+    # Capture final frame
+    if isinstance(obs, dict):
+        final_img = obs.get("image", obs.get("visual", None))
+    else:
+        final_img = obs
+    if final_img is not None:
+        if isinstance(final_img, np.ndarray):
+            final_img = torch.from_numpy(final_img).float()
+        if final_img.ndim == 3 and final_img.shape[0] not in (1, 3):
+            final_img = final_img.permute(2, 0, 1)
+        if final_img.max() > 1.5:
+            final_img = final_img / 127.5 - 1.0
+        frames.append(final_img.cpu())
+
+    return frames
+
+
+def evaluate_inhibition_level_gym(
+    inhibition_coeff: float,
+    n_eval: int,
+    rollout_length: int,
+    device: torch.device,
+    policy_model_name: str,
+    policy_img_size: int,
+    verbose: bool = True,
+) -> dict:
+    """
+    Run n_eval gym episodes with InhibitedPolicyWrapper at *inhibition_coeff*.
+    Returns per-trajectory scores and summary statistics.
+    """
+    env = _load_pusht_env()
+    policy = InhibitedPolicyWrapper(
+        model_name=policy_model_name,
+        inhibition_coeff=inhibition_coeff,
+    )
+
+    scores = []
+    for i in range(n_eval):
+        frames = run_single_gym_episode(policy, env, rollout_length, device, policy_img_size)
+
+        if len(frames) >= 2:
+            first_np = _to_hwc_uint8(frames[0])
+            final_np = _to_hwc_uint8(frames[-1])
+            gt_first_green = max(count_green_pixels(first_np), 1)
+            score = max(0.0, 1.0 - (count_green_pixels(final_np) / gt_first_green))
+        else:
+            score = 0.0
+
+        scores.append(score)
+        if verbose:
+            print(
+                f"  c={inhibition_coeff:.3f}  [{i+1:3d}/{n_eval}]  "
+                f"Gym score: {score:.3f}"
+            )
+
+    env.close()
+    mean_score = float(np.mean(scores))
+    std_score  = float(np.std(scores))
+    return {"inhibition_coeff": inhibition_coeff, "scores": scores, "mean": mean_score, "std": std_score}
+
+
+# ---------------------------------------------------------------------------
 # Per-noise-level evaluation
 # ---------------------------------------------------------------------------
 
@@ -261,38 +407,64 @@ def evaluate_inhibition_level(
 # Plotting
 # ---------------------------------------------------------------------------
 
-def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length):
+def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length,
+                      gt_results_by_coeff=None):
     """
     Bar + error-bar plot of mean success score vs inhibition coefficient.
+    When *gt_results_by_coeff* is provided, GT bars are plotted side-by-side with WM bars.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    coeffs = [r["inhibition_coeff"] for r in results_by_coeff]
-    means  = [r["mean"]             for r in results_by_coeff]
-    stds   = [r["std"]              for r in results_by_coeff]
-    n_eval = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
+    coeffs    = [r["inhibition_coeff"] for r in results_by_coeff]
+    wm_means  = [r["mean"] for r in results_by_coeff]
+    wm_stds   = [r["std"]  for r in results_by_coeff]
+    n_eval    = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(9, 4))
     x = np.arange(len(coeffs))
-    bars = ax.bar(x, means, yerr=stds, capsize=4,
-                  color="steelblue", edgecolor="white", width=0.6,
-                  error_kw={"ecolor": "black", "elinewidth": 1.2})
-    for bar, val in zip(bars, means):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + max(stds) * 0.05 + 0.01,
-            f"{val:.3f}",
-            ha="center", va="bottom", fontsize=9,
-        )
+
+    if gt_results_by_coeff is not None:
+        gt_means = [r["mean"] for r in gt_results_by_coeff]
+        gt_stds  = [r["std"]  for r in gt_results_by_coeff]
+        width = 0.35
+        wm_bars = ax.bar(x - width / 2, wm_means, yerr=wm_stds, capsize=4,
+                         color="steelblue", edgecolor="white", width=width,
+                         error_kw={"ecolor": "black", "elinewidth": 1.2},
+                         label="World-model")
+        gt_bars = ax.bar(x + width / 2, gt_means, yerr=gt_stds, capsize=4,
+                         color="tomato", edgecolor="white", width=width,
+                         error_kw={"ecolor": "black", "elinewidth": 1.2},
+                         label="GT gym")
+        for bar, val in zip(wm_bars, wm_means):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01, f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=7, color="steelblue")
+        for bar, val in zip(gt_bars, gt_means):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01, f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=7, color="tomato")
+        all_means = wm_means + gt_means
+        ax.legend(fontsize=9)
+    else:
+        width = 0.6
+        bars = ax.bar(x, wm_means, yerr=wm_stds, capsize=4,
+                      color="steelblue", edgecolor="white", width=width,
+                      error_kw={"ecolor": "black", "elinewidth": 1.2})
+        for bar, val in zip(bars, wm_means):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max(wm_stds) * 0.05 + 0.01, f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=9)
+        all_means = wm_means
+
     ax.set_xticks(x)
     ax.set_xticklabels([f"c={c}" for c in coeffs], rotation=30, ha="right")
-    ax.set_ylabel("Mean WM success score")
+    ax.set_ylabel("Mean success score")
     ax.set_title(
-        f"{model_name} — WM success vs inhibition coeff (rl={rollout_length}, n={n_eval})"
+        f"{model_name} — success vs inhibition coeff (rl={rollout_length}, n={n_eval})"
     )
-    ax.set_ylim(0, max(max(means) * 1.2, 0.1))
+    ax.set_ylim(0, max(max(all_means) * 1.2, 0.1))
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
 
@@ -303,27 +475,37 @@ def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length):
     return out_path
 
 
-def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length):
+def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length,
+                   gt_results_by_coeff=None):
     """
     Line plot with shaded ±1 std band: success score vs inhibition coefficient.
+    When *gt_results_by_coeff* is provided, GT is overlaid as a second line.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    coeffs = np.array([r["inhibition_coeff"] for r in results_by_coeff])
-    means  = np.array([r["mean"]             for r in results_by_coeff])
-    stds   = np.array([r["std"]              for r in results_by_coeff])
-    n_eval = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
+    coeffs   = np.array([r["inhibition_coeff"] for r in results_by_coeff])
+    wm_means = np.array([r["mean"] for r in results_by_coeff])
+    wm_stds  = np.array([r["std"]  for r in results_by_coeff])
+    n_eval   = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(coeffs, means, marker="o", color="steelblue", linewidth=2, label="mean score")
-    ax.fill_between(coeffs, means - stds, means + stds,
-                    alpha=0.25, color="steelblue", label="±1 std")
+    ax.plot(coeffs, wm_means, marker="o", color="steelblue", linewidth=2, label="WM (world model)")
+    ax.fill_between(coeffs, wm_means - wm_stds, wm_means + wm_stds,
+                    alpha=0.25, color="steelblue")
+
+    if gt_results_by_coeff is not None:
+        gt_means = np.array([r["mean"] for r in gt_results_by_coeff])
+        gt_stds  = np.array([r["std"]  for r in gt_results_by_coeff])
+        ax.plot(coeffs, gt_means, marker="s", color="tomato", linewidth=2, label="GT gym")
+        ax.fill_between(coeffs, gt_means - gt_stds, gt_means + gt_stds,
+                        alpha=0.25, color="tomato")
+
     ax.set_xlabel("Inhibition coefficient (c)")
-    ax.set_ylabel("Mean WM success score")
+    ax.set_ylabel("Mean success score")
     ax.set_title(
-        f"{model_name} — Policy ranking via WM (rl={rollout_length}, n={n_eval})"
+        f"{model_name} — Policy ranking WM vs GT (rl={rollout_length}, n={n_eval})"
     )
     ax.legend(fontsize=9)
     ax.grid(True, linestyle="--", alpha=0.4)
@@ -333,6 +515,55 @@ def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length):
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"Saved line plot: {out_path}")
+    return out_path
+
+
+def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout_length):
+    """
+    Two-panel figure: left = WM scores, right = GT gym scores.
+    Useful for visually verifying that WM ranking correlates with ground truth.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    coeffs   = np.array([r["inhibition_coeff"] for r in wm_results])
+    wm_means = np.array([r["mean"] for r in wm_results])
+    wm_stds  = np.array([r["std"]  for r in wm_results])
+    gt_means = np.array([r["mean"] for r in gt_results])
+    gt_stds  = np.array([r["std"]  for r in gt_results])
+    n_eval   = len(wm_results[0]["scores"]) if wm_results else 0
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=False)
+
+    for ax, means, stds, color, title in [
+        (axes[0], wm_means, wm_stds, "steelblue", "World-model rollout"),
+        (axes[1], gt_means, gt_stds, "tomato",    "GT gym rollout"),
+    ]:
+        x = np.arange(len(coeffs))
+        bars = ax.bar(x, means, yerr=stds, capsize=4,
+                      color=color, edgecolor="white", width=0.6,
+                      error_kw={"ecolor": "black", "elinewidth": 1.2})
+        for bar, val in zip(bars, means):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01, f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=8)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"c={c}" for c in coeffs], rotation=30, ha="right")
+        ax.set_ylabel("Mean success score")
+        ax.set_title(f"{title} (n={n_eval})")
+        ax.set_ylim(0, max(max(means) * 1.2, 0.1))
+        ax.grid(axis="y", linestyle="--", alpha=0.5)
+
+    fig.suptitle(
+        f"{model_name} — WM vs GT ranking (rl={rollout_length})", fontsize=12
+    )
+    plt.tight_layout()
+
+    out_path = os.path.join(output_dir, f"policy_ranking_comparison_rl{rollout_length}.png")
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"Saved comparison plot: {out_path}")
     return out_path
 
 
@@ -396,16 +627,52 @@ def policy_ranking_main(cfg):
             f"  → mean={result['mean']:.4f}  std={result['std']:.4f}"
         )
 
+    # ── GT gym sweep (optional) ───────────────────────────────────────────
+    gt_results_by_coeff = None
+    if getattr(cfg, "run_gym", False):
+        print("\n" + "=" * 60)
+        print("GT GYM ROLLOUT SWEEP")
+        print("=" * 60)
+        gt_results_by_coeff = []
+        for inhibition_coeff in cfg.inhibition_coeffs:
+            print(f"\n=== [Gym] Inhibition coeff c={inhibition_coeff:.3f} ===")
+            gt_result = evaluate_inhibition_level_gym(
+                inhibition_coeff=inhibition_coeff,
+                n_eval=cfg.n_eval,
+                rollout_length=cfg.rollout_length,
+                device=device,
+                policy_model_name=cfg.policy_model_name,
+                policy_img_size=cfg.policy_img_size,
+                verbose=True,
+            )
+            gt_results_by_coeff.append(gt_result)
+            print(
+                f"  → mean={gt_result['mean']:.4f}  std={gt_result['std']:.4f}"
+            )
+
     # ── Summary ───────────────────────────────────────────────────────────
     print("\n=== Policy Ranking Summary ===")
-    print(f"{'c':>8}  {'mean score':>12}  {'std':>8}")
-    print("-" * 34)
-    for r in results_by_coeff:
-        print(f"{r['inhibition_coeff']:>8.3f}  {r['mean']:>12.4f}  {r['std']:>8.4f}")
+    header = f"{'c':>8}  {'WM mean':>10}  {'WM std':>8}"
+    sep    = "-" * (34 + (22 if gt_results_by_coeff else 0))
+    if gt_results_by_coeff:
+        header += f"  {'GT mean':>10}  {'GT std':>8}"
+    print(header)
+    print(sep)
+    for i, r in enumerate(results_by_coeff):
+        line = f"{r['inhibition_coeff']:>8.3f}  {r['mean']:>10.4f}  {r['std']:>8.4f}"
+        if gt_results_by_coeff:
+            g = gt_results_by_coeff[i]
+            line += f"  {g['mean']:>10.4f}  {g['std']:>8.4f}"
+        print(line)
 
     # ── Save plots ────────────────────────────────────────────────────────
-    save_ranking_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length)
-    save_line_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length)
+    save_ranking_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length,
+                      gt_results_by_coeff=gt_results_by_coeff)
+    save_line_plot(results_by_coeff, cfg.output_dir, cfg.model_name, cfg.rollout_length,
+                   gt_results_by_coeff=gt_results_by_coeff)
+    if gt_results_by_coeff:
+        save_comparison_plot(results_by_coeff, gt_results_by_coeff,
+                             cfg.output_dir, cfg.model_name, cfg.rollout_length)
 
     # ── Save JSON ─────────────────────────────────────────────────────────
     summary = {
@@ -415,14 +682,23 @@ def policy_ranking_main(cfg):
         "n_eval":             cfg.n_eval,
         "policy_model_name":  cfg.policy_model_name,
         "inhibition_coeffs":  cfg.inhibition_coeffs,
-        "results": [
+        "wm_results": [
             {"inhibition_coeff": r["inhibition_coeff"], "mean": r["mean"], "std": r["std"]}
             for r in results_by_coeff
         ],
     }
+    if gt_results_by_coeff:
+        summary["gt_results"] = [
+            {"inhibition_coeff": r["inhibition_coeff"], "mean": r["mean"], "std": r["std"]}
+            for r in gt_results_by_coeff
+        ]
+
     out_json = os.path.join(cfg.output_dir, f"policy_ranking_rl{cfg.rollout_length}.json")
+    payload = {"summary": summary, "wm_per_trajectory": results_by_coeff}
+    if gt_results_by_coeff:
+        payload["gt_per_trajectory"] = gt_results_by_coeff
     with open(out_json, "w") as f:
-        json.dump({"summary": summary, "per_trajectory": results_by_coeff}, f, indent=2)
+        json.dump(payload, f, indent=2)
     print(f"\nResults saved to: {out_json}")
     tee.close()
 
@@ -456,6 +732,8 @@ def parse_args():
                         help="WM rollout steps per trajectory (default: 10)")
     parser.add_argument("--output_dir", default="./eval_results/policy_ranking",
                         help="Directory for JSON and plots.")
+    parser.add_argument("--run_gym", action="store_true",
+                        help="Also run GT gym rollouts and overlay results in plots.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda",
                         help="Torch device to use (default: cuda)")

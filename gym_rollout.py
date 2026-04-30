@@ -91,7 +91,11 @@ def run_gym_rollout(
     print(f"Running {n_eval} rollouts with length {rollout_length}...")
 
     for episode_idx in range(n_eval):
-        obs, info = env.reset()
+        reset_result = env.reset()
+        if isinstance(reset_result, tuple):
+            obs = reset_result[0]
+        else:
+            obs = reset_result
         frames = []
         actions = []
         success = None
@@ -159,8 +163,13 @@ def run_gym_rollout(
             else:
                 frames.append(img.squeeze(0).cpu().numpy())
 
-            # Step environment
-            obs, reward, terminated, truncated, info = env.step(action_np)
+            # Step environment (handle both old gym 4-tuple and new gymnasium 5-tuple)
+            step_result = env.step(action_np)
+            if len(step_result) == 5:
+                obs, reward, terminated, truncated, info = step_result
+            else:
+                obs, reward, terminated, info = step_result
+                truncated = False
             done = terminated or truncated
 
             if done:
