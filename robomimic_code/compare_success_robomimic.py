@@ -469,6 +469,10 @@ def parse_args():
                         help="Directory for JSON, plots, and example images.")
     parser.add_argument("--n_save_examples", type=int, default=10,
                         help="Max disagreement grids to save (default: 10)")
+    parser.add_argument("--success_threshold", type=float, default=0.5,
+                        help="VLM score above which a frame is judged a success (default: 0.5)")
+    parser.add_argument("--agreement_tol", type=float, default=0.2,
+                        help="|gt_score - wm_score| below this counts as agreement (default: 0.2)")
     parser.add_argument("--save_rollouts", action="store_true",
                         help="Save GT and WM frames as .mp4 videos and .npy arrays.")
     parser.add_argument("--video_fps", type=int, default=4,
