@@ -25,6 +25,9 @@ def load_robometer(device=None):
     Returns (exp_config, tokenizer, processor, model), or
             (None, None, None, None) on failure.
     """
+
+    print(f"[Robometer] snapshot exists: {os.path.isdir(_ROBOMETER_SNAPSHOT)} → {_ROBOMETER_SNAPSHOT}")
+    print(f"[Robometer] sibling lib exists: {os.path.isdir(_ROBOMETER_LIB)} → {_ROBOMETER_LIB}")
     try:
         from robometer.utils.save import load_model_from_hf
 
@@ -39,6 +42,8 @@ def load_robometer(device=None):
         print(f"[Robometer] Loaded model from {_ROBOMETER_SNAPSHOT}")
         return exp_config, tokenizer, processor, model
     except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"[Warning] Robometer model not available: {e}.")
         print(f"[Warning] Robometer model not available: {e}. Skipping Robometer scoring.")
         return None, None, None, None
 
