@@ -59,6 +59,7 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
   export TRANSFORMERS_OFFLINE=1
   mkdir -p \"\$HUGGINGFACE_HUB_CACHE\" \"\$TRANSFORMERS_CACHE\"
   pip install -q -U 'cython<3'
+  pip install -e /project2/jessetho_1732/rl_eval_wm/robometer
   sed -i 's/field(init=False, metadata=/field(init=False, default=None, metadata=/g' \
     /opt/micromamba/envs/app/lib/python3.12/site-packages/lerobot/policies/groot/groot_n1.py
   cd /project2/jessetho_1732/rl_eval_wm/dino_wm
