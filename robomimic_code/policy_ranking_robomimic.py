@@ -29,7 +29,9 @@ Usage:
 """
 
 import os
+import re
 import sys
+import glob
 import json
 import argparse
 from pathlib import Path
@@ -176,6 +178,15 @@ def _build_robomimic_obs_dict(image_uint8_hwc: np.ndarray,
 # ---------------------------------------------------------------------------
 # Trajectory sampling
 # ---------------------------------------------------------------------------
+
+def _ckpt_label(path: str) -> str:
+    """Short display label for a policy checkpoint filename."""
+    name = os.path.basename(path)
+    m = re.search(r"epoch[=_-]?(\d+)", name, flags=re.IGNORECASE)
+    if m:
+        return f"ep{int(m.group(1))}"
+    return os.path.splitext(name)[0]
+
 
 def sample_valid_trajectory(dset, rollout_length, frameskip, rng):
     """Return a trajectory from a shuffled pass that is long enough."""
@@ -535,7 +546,8 @@ def evaluate_inhibition_level_gym(
 # ---------------------------------------------------------------------------
 
 def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length,
-                      gt_results_by_coeff=None):
+                      gt_results_by_coeff=None, tick_labels=None,
+                      x_label_str="inhibition coeff", out_suffix=""):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -544,6 +556,8 @@ def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length,
     wm_means  = [r["mean"] for r in results_by_coeff]
     wm_stds   = [r["std"]  for r in results_by_coeff]
     n_eval    = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
+    if tick_labels is None:
+        tick_labels = [f"c={c}" for c in coeffs]
 
     fig, ax = plt.subplots(figsize=(9, 4))
     x = np.arange(len(coeffs))
@@ -582,17 +596,17 @@ def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length,
         all_means = wm_means
 
     ax.set_xticks(x)
-    ax.set_xticklabels([f"c={c}" for c in coeffs], rotation=30, ha="right")
+    ax.set_xticklabels(tick_labels, rotation=30, ha="right")
     ax.set_ylabel("Robometer success_final")
     ax.set_title(
-        f"{model_name} — Robometer success vs inhibition coeff "
+        f"{model_name} — Robometer success vs {x_label_str} "
         f"(rl={rollout_length}, n={n_eval})"
     )
     ax.set_ylim(0, max(max(all_means) * 1.2, 0.1))
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
 
-    out_path = os.path.join(output_dir, f"policy_ranking_robomimic_rl{rollout_length}.png")
+    out_path = os.path.join(output_dir, f"policy_ranking_robomimic{out_suffix}_rl{rollout_length}.png")
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"Saved ranking plot: {out_path}")
@@ -600,7 +614,8 @@ def save_ranking_plot(results_by_coeff, output_dir, model_name, rollout_length,
 
 
 def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length,
-                   gt_results_by_coeff=None):
+                   gt_results_by_coeff=None, tick_labels=None,
+                   x_label_str="Inhibition coefficient (c)", out_suffix=""):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -610,38 +625,47 @@ def save_line_plot(results_by_coeff, output_dir, model_name, rollout_length,
     wm_stds  = np.array([r["std"]  for r in results_by_coeff])
     n_eval   = len(results_by_coeff[0]["scores"]) if results_by_coeff else 0
 
+    if tick_labels is not None:
+        x_values = np.arange(len(coeffs), dtype=float)
+    else:
+        x_values = coeffs
+
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(coeffs, wm_means, marker="o", color="steelblue", linewidth=2,
+    ax.plot(x_values, wm_means, marker="o", color="steelblue", linewidth=2,
             label="WM (world model)")
-    ax.fill_between(coeffs, wm_means - wm_stds, wm_means + wm_stds,
+    ax.fill_between(x_values, wm_means - wm_stds, wm_means + wm_stds,
                     alpha=0.25, color="steelblue")
 
     if gt_results_by_coeff is not None:
         gt_means = np.array([r["mean"] for r in gt_results_by_coeff])
         gt_stds  = np.array([r["std"]  for r in gt_results_by_coeff])
-        ax.plot(coeffs, gt_means, marker="s", color="tomato", linewidth=2,
+        ax.plot(x_values, gt_means, marker="s", color="tomato", linewidth=2,
                 label="GT gym")
-        ax.fill_between(coeffs, gt_means - gt_stds, gt_means + gt_stds,
+        ax.fill_between(x_values, gt_means - gt_stds, gt_means + gt_stds,
                         alpha=0.25, color="tomato")
 
-    ax.set_xlabel("Inhibition coefficient (c)")
+    ax.set_xlabel(x_label_str)
     ax.set_ylabel("Robometer success_final")
     ax.set_title(
         f"{model_name} — Policy ranking WM vs GT (rl={rollout_length}, n={n_eval})"
     )
+    if tick_labels is not None:
+        ax.set_xticks(x_values)
+        ax.set_xticklabels(tick_labels, rotation=30, ha="right")
     ax.legend(fontsize=9)
     ax.grid(True, linestyle="--", alpha=0.4)
     plt.tight_layout()
 
     out_path = os.path.join(output_dir,
-                            f"policy_ranking_robomimic_line_rl{rollout_length}.png")
+                            f"policy_ranking_robomimic_line{out_suffix}_rl{rollout_length}.png")
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"Saved line plot: {out_path}")
     return out_path
 
 
-def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout_length):
+def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout_length,
+                          tick_labels=None, out_suffix=""):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -652,6 +676,8 @@ def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout
     gt_means = np.array([r["mean"] for r in gt_results])
     gt_stds  = np.array([r["std"]  for r in gt_results])
     n_eval   = len(wm_results[0]["scores"]) if wm_results else 0
+    if tick_labels is None:
+        tick_labels = [f"c={c}" for c in coeffs]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=False)
 
@@ -668,7 +694,7 @@ def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout
                     bar.get_height() + 0.01, f"{val:.3f}",
                     ha="center", va="bottom", fontsize=8)
         ax.set_xticks(x)
-        ax.set_xticklabels([f"c={c}" for c in coeffs], rotation=30, ha="right")
+        ax.set_xticklabels(tick_labels, rotation=30, ha="right")
         ax.set_ylabel("Robometer success_final")
         ax.set_title(f"{title} (n={n_eval})")
         ax.set_ylim(0, max(max(means) * 1.2, 0.1))
@@ -680,7 +706,7 @@ def save_comparison_plot(wm_results, gt_results, output_dir, model_name, rollout
     plt.tight_layout()
 
     out_path = os.path.join(output_dir,
-                            f"policy_ranking_robomimic_comparison_rl{rollout_length}.png")
+                            f"policy_ranking_robomimic_comparison{out_suffix}_rl{rollout_length}.png")
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"Saved comparison plot: {out_path}")
@@ -696,9 +722,17 @@ def policy_ranking_main(cfg):
     seed(cfg.seed)
     rng = np.random.RandomState(cfg.seed)
 
+    if bool(cfg.policy_ckpt) == bool(cfg.policy_ckpt_dir):
+        raise RuntimeError(
+            "Provide exactly one of --policy_ckpt or --policy_ckpt_dir."
+        )
+    ckpt_mode = cfg.policy_ckpt_dir is not None
+    out_suffix = "_ckptsweep" if ckpt_mode else ""
+
     os.makedirs(cfg.output_dir, exist_ok=True)
     tee = Tee(os.path.join(
-        cfg.output_dir, f"policy_ranking_robomimic_rl{cfg.rollout_length}.log"
+        cfg.output_dir,
+        f"policy_ranking_robomimic{out_suffix}_rl{cfg.rollout_length}.log",
     ))
 
     # ── World model ───────────────────────────────────────────────────────
@@ -756,15 +790,34 @@ def policy_ranking_main(cfg):
 
     print(f"\nWorld model '{cfg.model_name}' (epoch={cfg.model_epoch})")
     print(f"  rollout_length={cfg.rollout_length}, frameskip={frameskip}, num_hist={num_hist}")
-    print(f"  Policy ckpt: {cfg.policy_ckpt}")
     print(f"  Robometer prompt: {cfg.robometer_prompt!r}")
-    print(f"  Inhibition coefficients: {cfg.inhibition_coeffs}")
-    print(f"  n_eval per level: {cfg.n_eval}\n")
+    print(f"  n_eval per level: {cfg.n_eval}")
 
-    # ── WM sweep over inhibition coefficients ────────────────────────────
+    # ── Build the sweep: list of (label, ckpt_path, inhibition_coeff) ────
+    if ckpt_mode:
+        ckpt_paths = sorted(glob.glob(os.path.join(cfg.policy_ckpt_dir, cfg.ckpt_glob)))
+        if not ckpt_paths:
+            raise RuntimeError(
+                f"No checkpoints matching {cfg.ckpt_glob!r} in {cfg.policy_ckpt_dir}"
+            )
+        print(f"  Policy ckpt dir: {cfg.policy_ckpt_dir}")
+        print(f"  Found {len(ckpt_paths)} checkpoints (ckpt_glob={cfg.ckpt_glob!r}, "
+              f"ckpt_inhibition_coeff={cfg.ckpt_inhibition_coeff})")
+        for p in ckpt_paths:
+            print(f"    {os.path.basename(p)}")
+        sweep = [(_ckpt_label(p), p, cfg.ckpt_inhibition_coeff) for p in ckpt_paths]
+    else:
+        print(f"  Policy ckpt: {cfg.policy_ckpt}")
+        print(f"  Inhibition coefficients: {cfg.inhibition_coeffs}")
+        sweep = [(f"c={c}", cfg.policy_ckpt, float(c)) for c in cfg.inhibition_coeffs]
+
+    print()
+
+    # ── WM sweep ─────────────────────────────────────────────────────────
     results_by_coeff = []
-    for inhibition_coeff in cfg.inhibition_coeffs:
-        print(f"\n=== [WM] Inhibition coeff c={inhibition_coeff:.3f} ===")
+    for label, ckpt_path, inhibition_coeff in sweep:
+        print(f"\n=== [WM] {label}  (ckpt={os.path.basename(ckpt_path)}, "
+              f"c={inhibition_coeff:.3f}) ===")
         result = evaluate_inhibition_level_wm(
             inhibition_coeff=inhibition_coeff,
             wm=wm,
@@ -774,7 +827,7 @@ def policy_ranking_main(cfg):
             rollout_length=cfg.rollout_length,
             n_eval=cfg.n_eval,
             device=device,
-            policy_ckpt=cfg.policy_ckpt,
+            policy_ckpt=ckpt_path,
             camera_names=dataset_camera_names,
             proprio_keys=dataset_proprio_keys,
             proprio_dims=proprio_dims,
@@ -785,6 +838,8 @@ def policy_ranking_main(cfg):
             rng=rng,
             verbose=True,
         )
+        result["label"] = label
+        result["ckpt_path"] = ckpt_path
         results_by_coeff.append(result)
         print(f"  → mean={result['mean']:.4f}  std={result['std']:.4f}")
 
@@ -795,14 +850,15 @@ def policy_ranking_main(cfg):
         print("GT GYM ROLLOUT SWEEP")
         print("=" * 60)
         gt_results_by_coeff = []
-        for inhibition_coeff in cfg.inhibition_coeffs:
-            print(f"\n=== [Gym] Inhibition coeff c={inhibition_coeff:.3f} ===")
+        for label, ckpt_path, inhibition_coeff in sweep:
+            print(f"\n=== [Gym] {label}  (ckpt={os.path.basename(ckpt_path)}, "
+                  f"c={inhibition_coeff:.3f}) ===")
             gt_result = evaluate_inhibition_level_gym(
                 inhibition_coeff=inhibition_coeff,
                 n_eval=cfg.n_eval,
                 rollout_length=cfg.rollout_length,
                 device=device,
-                policy_ckpt=cfg.policy_ckpt,
+                policy_ckpt=ckpt_path,
                 data_path=data_path,
                 camera_names=env_camera_names,
                 proprio_keys=env_proprio_keys,
@@ -811,6 +867,8 @@ def policy_ranking_main(cfg):
                 robometer_prompt=cfg.robometer_prompt,
                 verbose=True,
             )
+            gt_result["label"] = label
+            gt_result["ckpt_path"] = ckpt_path
             gt_results_by_coeff.append(gt_result)
             print(
                 f"  → mean={gt_result['mean']:.4f}  std={gt_result['std']:.4f}  "
@@ -819,13 +877,15 @@ def policy_ranking_main(cfg):
 
     # ── Summary ───────────────────────────────────────────────────────────
     print("\n=== Policy Ranking Summary (Robomimic) ===")
-    header = f"{'c':>8}  {'WM mean':>10}  {'WM std':>8}"
+    label_col = "checkpoint" if ckpt_mode else "c"
+    label_w   = max(10, max(len(r["label"]) for r in results_by_coeff))
+    header = f"{label_col:>{label_w}}  {'WM mean':>10}  {'WM std':>8}"
     if gt_results_by_coeff:
         header += f"  {'GT mean':>10}  {'GT std':>8}  {'GT env_succ':>11}"
     print(header)
     print("-" * len(header))
     for i, r in enumerate(results_by_coeff):
-        line = f"{r['inhibition_coeff']:>8.3f}  {r['mean']:>10.4f}  {r['std']:>8.4f}"
+        line = f"{r['label']:>{label_w}}  {r['mean']:>10.4f}  {r['std']:>8.4f}"
         if gt_results_by_coeff:
             g = gt_results_by_coeff[i]
             line += (f"  {g['mean']:>10.4f}  {g['std']:>8.4f}  "
@@ -833,13 +893,24 @@ def policy_ranking_main(cfg):
         print(line)
 
     # ── Save plots ────────────────────────────────────────────────────────
+    plot_kwargs = {}
+    if ckpt_mode:
+        plot_kwargs = {
+            "tick_labels": [r["label"] for r in results_by_coeff],
+            "out_suffix":  out_suffix,
+        }
     save_ranking_plot(results_by_coeff, cfg.output_dir, cfg.model_name,
-                      cfg.rollout_length, gt_results_by_coeff=gt_results_by_coeff)
+                      cfg.rollout_length, gt_results_by_coeff=gt_results_by_coeff,
+                      x_label_str="checkpoint" if ckpt_mode else "inhibition coeff",
+                      **plot_kwargs)
     save_line_plot(results_by_coeff, cfg.output_dir, cfg.model_name,
-                   cfg.rollout_length, gt_results_by_coeff=gt_results_by_coeff)
+                   cfg.rollout_length, gt_results_by_coeff=gt_results_by_coeff,
+                   x_label_str="Checkpoint" if ckpt_mode else "Inhibition coefficient (c)",
+                   **plot_kwargs)
     if gt_results_by_coeff:
         save_comparison_plot(results_by_coeff, gt_results_by_coeff,
-                             cfg.output_dir, cfg.model_name, cfg.rollout_length)
+                             cfg.output_dir, cfg.model_name, cfg.rollout_length,
+                             **plot_kwargs)
 
     # ── Save JSON ─────────────────────────────────────────────────────────
     summary = {
@@ -847,17 +918,29 @@ def policy_ranking_main(cfg):
         "model_epoch":        cfg.model_epoch,
         "rollout_length":     cfg.rollout_length,
         "n_eval":             cfg.n_eval,
-        "policy_ckpt":        cfg.policy_ckpt,
         "robometer_prompt":   cfg.robometer_prompt,
-        "inhibition_coeffs":  list(cfg.inhibition_coeffs),
+        "sweep_mode":         "checkpoint" if ckpt_mode else "inhibition",
         "wm_results": [
-            {"inhibition_coeff": r["inhibition_coeff"], "mean": r["mean"], "std": r["std"]}
+            {"label":            r["label"],
+             "ckpt_path":        r.get("ckpt_path"),
+             "inhibition_coeff": r["inhibition_coeff"],
+             "mean":             r["mean"],
+             "std":              r["std"]}
             for r in results_by_coeff
         ],
     }
+    if ckpt_mode:
+        summary["policy_ckpt_dir"] = cfg.policy_ckpt_dir
+        summary["ckpt_glob"]       = cfg.ckpt_glob
+        summary["ckpt_inhibition_coeff"] = cfg.ckpt_inhibition_coeff
+    else:
+        summary["policy_ckpt"]       = cfg.policy_ckpt
+        summary["inhibition_coeffs"] = list(cfg.inhibition_coeffs)
     if gt_results_by_coeff:
         summary["gt_results"] = [
-            {"inhibition_coeff":  r["inhibition_coeff"],
+            {"label":             r["label"],
+             "ckpt_path":         r.get("ckpt_path"),
+             "inhibition_coeff":  r["inhibition_coeff"],
              "mean":              r["mean"],
              "std":               r["std"],
              "env_success_rate":  r["env_success_rate"]}
@@ -865,7 +948,8 @@ def policy_ranking_main(cfg):
         ]
 
     out_json = os.path.join(
-        cfg.output_dir, f"policy_ranking_robomimic_rl{cfg.rollout_length}.json"
+        cfg.output_dir,
+        f"policy_ranking_robomimic{out_suffix}_rl{cfg.rollout_length}.json",
     )
     payload = {"summary": summary, "wm_per_trajectory": results_by_coeff}
     if gt_results_by_coeff:
@@ -893,11 +977,21 @@ def parse_args():
                         help="WM model name (subdir under outputs/)")
     parser.add_argument("--model_epoch", default="latest",
                         help="Checkpoint epoch tag (default: latest)")
-    parser.add_argument("--policy_ckpt", required=True,
-                        help="Path to robomimic policy checkpoint (.pth)")
+    parser.add_argument("--policy_ckpt", default=None,
+                        help="Path to a single robomimic policy checkpoint (.pth). "
+                             "Mutually exclusive with --policy_ckpt_dir.")
+    parser.add_argument("--policy_ckpt_dir", default=None,
+                        help="Directory of policy checkpoints to sweep over. "
+                             "Each checkpoint is evaluated as one ranking entry.")
+    parser.add_argument("--ckpt_glob", default="*.pth",
+                        help="Glob pattern for checkpoints under --policy_ckpt_dir "
+                             "(default: *.pth)")
+    parser.add_argument("--ckpt_inhibition_coeff", type=float, default=1.0,
+                        help="Fixed inhibition coefficient applied during a "
+                             "checkpoint sweep (default: 1.0 — no inhibition)")
     parser.add_argument("--inhibition_coeffs", type=float, nargs="+",
                         default=[0.0, 0.1, 0.2, 0.5, 1.0, 2.0],
-                        help="Inhibition coefficients to evaluate")
+                        help="Inhibition coefficients (used only in single-ckpt mode)")
     parser.add_argument("--n_eval", type=int, default=100,
                         help="Number of trajectories per inhibition level (default: 100)")
     parser.add_argument("--rollout_length", type=int, default=20,

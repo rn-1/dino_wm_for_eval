@@ -69,8 +69,6 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --n_eval 1000 \
     --rollout_length 10 \
     --task_prompt 'Pick up the red cube and place it in the bin.' \
-    --vlm_model_name Qwen/Qwen3-VL-4B-Instruct \
-    --local_files_only \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success_robomimic/rl10 \
     --n_save_examples 10 \
     --save_rollouts \
@@ -83,8 +81,6 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --n_eval 1000 \
     --rollout_length 20 \
     --task_prompt 'Pick up the red cube and place it in the bin.' \
-    --vlm_model_name Qwen/Qwen3-VL-4B-Instruct \
-    --local_files_only \
     --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success_robomimic/rl20 \
     --n_save_examples 10 \
     --save_rollouts \

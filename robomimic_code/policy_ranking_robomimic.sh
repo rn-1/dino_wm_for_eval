@@ -45,9 +45,11 @@ mkdir -p "$HUGGINGFACE_HUB_CACHE" "$TRANSFORMERS_CACHE"
 
 export WANDB_API_KEY="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"
 
-# Path to a robomimic-trained policy checkpoint (.pth).
-# Set this to the actual checkpoint before submitting.
-POLICY_CKPT="/project2/jessetho_1732/rl_eval_wm/dino_wm/data/robomimic_policy.pth"
+# Directory of robomimic-style policy checkpoints — each file is one model
+# evaluated as a separate ranking entry by --policy_ckpt_dir.
+POLICY_CKPT_DIR="/project2/jessetho_1732/rl_eval_wm/dino_wm/20260423193411_diffusion_policy_lift-mh-image_v15_Ta=1/20260423193411/models"
+# Glob pattern matching checkpoint files inside POLICY_CKPT_DIR (override if .pth/.pt).
+CKPT_GLOB="*.ckpt"
 
 apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rnene/dinoenv.sif bash -lc "
   export PATH=/opt/micromamba/envs/app/bin:/usr/local/bin:/usr/bin:/bin
@@ -72,8 +74,9 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name robomimic \
     --model_epoch latest \
-    --policy_ckpt $POLICY_CKPT \
-    --inhibition_coeffs 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --policy_ckpt_dir \"$POLICY_CKPT_DIR\" \
+    --ckpt_glob \"$CKPT_GLOB\" \
+    --ckpt_inhibition_coeff 1.0 \
     --n_eval 1000 \
     --rollout_length 10 \
     --robometer_prompt 'Pick up the red cube and place it in the bin.' \
@@ -84,8 +87,9 @@ apptainer exec --nv --fakeroot --writable-tmpfs --bind /apps:/apps /scratch1/rne
     --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \
     --model_name robomimic \
     --model_epoch latest \
-    --policy_ckpt $POLICY_CKPT \
-    --inhibition_coeffs 0.0 0.1 0.2 0.5 1.0 2.0 \
+    --policy_ckpt_dir \"$POLICY_CKPT_DIR\" \
+    --ckpt_glob \"$CKPT_GLOB\" \
+    --ckpt_inhibition_coeff 1.0 \
     --n_eval 1000 \
     --rollout_length 20 \
     --robometer_prompt 'Pick up the red cube and place it in the bin.' \

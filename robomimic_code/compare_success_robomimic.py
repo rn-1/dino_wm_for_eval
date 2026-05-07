@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
 """
-compare_success.py — VLM-judged success comparison: GT trajectory vs WM trajectory.
+compare_success_robomimic.py — Robometer-progress comparison: GT vs WM trajectory.
 
 For each sampled trajectory:
   1. Run an open-loop WM rollout with GT actions → WM-predicted frames.
   2. Retrieve the corresponding GT frames from the dataset.
-  3. Feed the final frame of each trajectory to the VLM judge (Qwen3-VL-4B).
-  4. Record whether the GT and WM trajectories are judged as successes.
+  3. Score both videos end-to-end with Robometer to extract per-frame progress.
+  4. Compare progress (final-frame and mean-over-clip) between GT and WM.
+
+The trajectories sampled here are not full point-to-point episodes, so a
+binary success judgement on the final frame is not meaningful. Progress is a
+continuous signal in [0, 1] that reflects how far along the task the clip has
+gotten, which is the appropriate quantity to compare WM-decoded video against
+the dataset's GT video.
 
 Outputs (in --output_dir):
-  compare_success_rl{N}.json  — per-trajectory + aggregate results
-  compare_success_rl{N}.png   — bar / comparison plot
-  high_disagreement/          — PNG grids for GT-success / WM-failure cases
-  low_loss_examples/          — optional: side-by-side frames for top examples
+  compare_success_rl{N}.json  — per-trajectory + aggregate progress
+  compare_success_rl{N}.png   — bar plot (GT vs WM progress, MAE)
+  compare_success_scatter_rl{N}.png — per-traj GT vs WM final progress
+  disagreements_top/          — PNG grids for trajectories with the largest
+                                 |gt_progress_final − wm_progress_final|
 
 Usage:
-    python compare_success.py \\
+    python compare_success_robomimic.py \\
         --ckpt_base_path /project2/jessetho_1732/rl_eval_wm/dino_wm \\
-        --model_name pusht \\
+        --model_name robomimic \\
         --n_eval 100 \\
         --rollout_length 10 \\
-        --task_prompt "Push the T block to the goal position." \\
-        --output_dir /project2/jessetho_1732/rl_eval_wm/dino_wm/eval_results/compare_success
+        --task_prompt "Pick up the red cube and place it in the bin." \\
+        --output_dir /project2/.../eval_results/compare_success_robomimic
 """
 
 import os
@@ -45,7 +52,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from vlm_judge import load_vlm_judge, judge_frame
+from use_robometer import load_robometer, infer_robometer
 from rollout import _load_model, _load_dataset_with_legacy_target_fallback
 from utils import seed
 
@@ -76,30 +83,6 @@ class Tee:
     def close(self):
         sys.stdout = self._stdout
         self._file.close()
-
-
-# ---------------------------------------------------------------------------
-# VLM response parsing
-# ---------------------------------------------------------------------------
-
-def _parse_vlm_score(raw_response: str) -> float:
-    """
-    Parse VLM response to extract numerical score in [0, 1].
-
-    VLM is instructed to respond with a number between 0.0 and 1.0.
-    Extract the first number found in the response.
-    """
-    import re
-    # Find all floating-point numbers in the response
-    numbers = re.findall(r'0?\.\d+|[0-1](?:\.\d+)?', raw_response.strip())
-    if numbers:
-        try:
-            score = float(numbers[0])
-            return max(0.0, min(1.0, score))  # Clamp to [0, 1]
-        except ValueError:
-            pass
-    # Fallback: return 0.0
-    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -178,35 +161,43 @@ def _save_comparison_grid(gt_frames, wm_frames, gt_success, wm_success, out_path
 
 def _save_summary_plot(results, output_dir, model_name, rollout_length):
     """
-    Save a summary bar chart comparing GT vs WM success rates.
+    Save a summary bar chart comparing GT vs WM Robometer progress.
+
+    Bars: GT progress (final-frame mean), WM progress (final-frame mean),
+          GT progress (per-frame mean), WM progress (per-frame mean), MAE.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    gt_rate = results["gt_mean_score"]
-    wm_rate = results["wm_mean_score"]
-    agree_rate = results["agreement_rate"]
+    gt_final = results["gt_progress_final_mean"]
+    wm_final = results["wm_progress_final_mean"]
+    gt_mean  = results["gt_progress_mean_of_mean"]
+    wm_mean  = results["wm_progress_mean_of_mean"]
+    mae_final = results["progress_final_mae"]
     n = results["n_eval"]
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    bars = ax.bar(
-        ["GT score", "WM score", "Agreement"],
-        [gt_rate, wm_rate, agree_rate],
-        color=["steelblue", "darkorange", "seagreen"],
-        width=0.5,
-        edgecolor="white",
-    )
-    for bar, val in zip(bars, [gt_rate, wm_rate, agree_rate]):
+    labels = ["GT final", "WM final", "GT mean", "WM mean", "MAE (final)"]
+    values = [gt_final, wm_final, gt_mean, wm_mean, mae_final]
+    colors = ["steelblue", "darkorange", "skyblue", "navajowhite", "tomato"]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bars = ax.bar(labels, values, color=colors, width=0.6, edgecolor="white")
+    for bar, val in zip(bars, values):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.01,
             f"{val:.3f}",
-            ha="center", va="bottom", fontsize=11,
+            ha="center", va="bottom", fontsize=10,
         )
-    ax.set_ylim(0, max(1.1, gt_rate * 1.1, wm_rate * 1.1))
-    ax.set_ylabel("Score / Rate")
-    ax.set_title(f"{model_name} — green-pixel success score (rl={rollout_length}, n={n})")
+    ax.set_ylim(0, max(1.05, max(values) * 1.2))
+    ax.set_ylabel("Robometer progress (∈ [0, 1])")
+    corr = results.get("progress_final_pearson_r")
+    corr_str = f", r={corr:.3f}" if corr is not None and np.isfinite(corr) else ""
+    ax.set_title(
+        f"{model_name} — Robometer progress GT vs WM "
+        f"(rl={rollout_length}, n={n}{corr_str})"
+    )
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
 
@@ -214,6 +205,37 @@ def _save_summary_plot(results, output_dir, model_name, rollout_length):
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
     print(f"Saved summary plot: {out_path}")
+
+
+def _save_scatter_plot(records, output_dir, model_name, rollout_length, pearson_r):
+    """Scatter of per-trajectory GT vs WM final-frame progress, with y=x reference."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    gt = np.array([r["gt_progress_final"] for r in records])
+    wm = np.array([r["wm_progress_final"] for r in records])
+    n = len(records)
+
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
+    ax.scatter(gt, wm, s=20, alpha=0.6, color="steelblue", edgecolor="white")
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.4, linewidth=1)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel("GT final progress")
+    ax.set_ylabel("WM final progress")
+    title = f"{model_name} — GT vs WM final progress (rl={rollout_length}, n={n})"
+    if pearson_r is not None and np.isfinite(pearson_r):
+        title += f"  |  Pearson r={pearson_r:.3f}"
+    ax.set_title(title, fontsize=10)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+
+    out_path = os.path.join(output_dir,
+                            f"compare_success_scatter_rl{rollout_length}.png")
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"Saved scatter plot: {out_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -288,15 +310,14 @@ def compare_success_main(cfg):
     os.makedirs(cfg.output_dir, exist_ok=True)
     tee = Tee(os.path.join(cfg.output_dir, "compare_success.log"))
 
-    # ── VLM judge ─────────────────────────────────────────────────────────
-    vlm_processor, vlm_model = load_vlm_judge(
-        model_name=cfg.vlm_model_name,
-        device=device,
-        hf_cache_dir=os.path.join(cfg.ckpt_base_path, ".hf_cache"),
-        local_files_only=cfg.local_files_only,
-    )
-    if vlm_model is None:
-        raise RuntimeError("Could not load VLM judge model.")
+    # ── Robometer judge ───────────────────────────────────────────────────
+    print("Loading Robometer ...")
+    robometer_bundle = load_robometer(device=device)
+    if robometer_bundle[3] is None:
+        raise RuntimeError(
+            "Robometer model failed to load — required for progress scoring. "
+            "Check .hf_cache snapshot and the sibling 'robometer' repo."
+        )
 
     # ── World model ───────────────────────────────────────────────────────
     model_path = Path(cfg.ckpt_base_path) / "outputs" / cfg.model_name
@@ -312,7 +333,7 @@ def compare_success_main(cfg):
     wm.eval()
 
     if wm.decoder is None:
-        raise RuntimeError("World model has no decoder — pixel decoding required for VLM judging.")
+        raise RuntimeError("World model has no decoder — pixel decoding required for Robometer scoring.")
 
     num_hist  = model_cfg.num_hist
     frameskip = model_cfg.frameskip
@@ -320,7 +341,7 @@ def compare_success_main(cfg):
 
     print(f"\nWorld model '{cfg.model_name}' (epoch={cfg.model_epoch})")
     print(f"  rollout_length={rollout_length}, frameskip={frameskip}, num_hist={num_hist}")
-    print(f"  VLM judge: {cfg.vlm_model_name}")
+    print(f"  Robometer prompt: {cfg.task_prompt!r}")
 
     print(f"Running {cfg.n_eval} evaluations ...\n")
 
@@ -332,7 +353,6 @@ def compare_success_main(cfg):
 
     # ── Evaluation loop ───────────────────────────────────────────────────
     records = []
-    disagreements = []   # (gt_score, wm_score, gt_frames, wm_frames) where WM significantly underperforms
 
     for i in range(cfg.n_eval):
         obs, act = sample_valid_trajectory(dset, rollout_length, frameskip, rng)
@@ -342,94 +362,119 @@ def compare_success_main(cfg):
             wm, obs, act, frameskip, num_hist, rollout_length, device
         )
 
-        # Save rollout videos and arrays
         if rollouts_dir is not None:
             base = os.path.join(rollouts_dir, f"traj_{i:03d}")
             _save_rollout_outputs(gt_frames, pred_frames, base, fps=cfg.video_fps)
 
-        # VLM success scoring: judge final frames
-        gt_final_np = _to_hwc_uint8(gt_frames[-1])
-        wm_final_np = _to_hwc_uint8(pred_frames[-1])
+        # Robometer scoring: full-clip progress for GT and WM videos
+        gt_u8 = _frames_to_uint8(gt_frames)        # (T, H, W, C) uint8
+        wm_u8 = _frames_to_uint8(pred_frames)
+        gt_progress, _ = infer_robometer(*robometer_bundle, gt_u8,
+                                         cfg.task_prompt, device=device)
+        wm_progress, _ = infer_robometer(*robometer_bundle, wm_u8,
+                                         cfg.task_prompt, device=device)
 
-        gt_judge = judge_frame(vlm_processor, vlm_model, gt_final_np, cfg.task_prompt, device=device)
-        wm_judge = judge_frame(vlm_processor, vlm_model, wm_final_np, cfg.task_prompt, device=device)
+        gt_progress_final = float(gt_progress[-1]) if len(gt_progress) else 0.0
+        wm_progress_final = float(wm_progress[-1]) if len(wm_progress) else 0.0
+        gt_progress_mean  = float(np.mean(gt_progress)) if len(gt_progress) else 0.0
+        wm_progress_mean  = float(np.mean(wm_progress)) if len(wm_progress) else 0.0
 
-        gt_score = _parse_vlm_score(gt_judge["raw_response"])
-        wm_score = _parse_vlm_score(wm_judge["raw_response"])
-        gt_success = gt_score > cfg.success_threshold
-        wm_success = wm_score > cfg.success_threshold
-        agree    = abs(gt_score - wm_score) < cfg.agreement_tol
+        progress_diff_final = abs(gt_progress_final - wm_progress_final)
+        agree = progress_diff_final < cfg.agreement_tol
 
         records.append({
-            "traj_idx":    i,
-            "gt_score":    gt_score,
-            "wm_score":    wm_score,
-            "gt_success":  gt_success,
-            "wm_success":  wm_success,
-            "gt_response": gt_judge["raw_response"],
-            "wm_response": wm_judge["raw_response"],
-            "agreement":   agree,
+            "traj_idx":            i,
+            "gt_progress_final":   gt_progress_final,
+            "wm_progress_final":   wm_progress_final,
+            "gt_progress_mean":    gt_progress_mean,
+            "wm_progress_mean":    wm_progress_mean,
+            "progress_diff_final": progress_diff_final,
+            "agreement":           bool(agree),
+            "gt_progress_seq":     [float(x) for x in gt_progress],
+            "wm_progress_seq":     [float(x) for x in wm_progress],
         })
-
-        if gt_success and not wm_success:
-            disagreements.append((i, gt_frames, pred_frames, gt_score, wm_score))
 
         print(
             f"  [{i+1:3d}/{cfg.n_eval}]  "
-            f"GT: {gt_score:.3f}  WM: {wm_score:.3f}  "
+            f"GT prog: {gt_progress_final:.3f}  WM prog: {wm_progress_final:.3f}  "
+            f"|Δ|={progress_diff_final:.3f}  "
             f"{'AGREE' if agree else 'DISAGREE'}"
         )
 
     # ── Aggregate ─────────────────────────────────────────────────────────
     n = len(records)
-    gt_success_rate = sum(r["gt_success"] for r in records) / n
-    wm_success_rate = sum(r["wm_success"] for r in records) / n
-    agreement_rate  = sum(r["agreement"]  for r in records) / n
+    gt_finals = np.array([r["gt_progress_final"] for r in records])
+    wm_finals = np.array([r["wm_progress_final"] for r in records])
+    gt_means  = np.array([r["gt_progress_mean"]  for r in records])
+    wm_means  = np.array([r["wm_progress_mean"]  for r in records])
+    diffs     = np.abs(gt_finals - wm_finals)
 
-    # Rates conditioned on GT outcome
-    gt_pos = [r for r in records if r["gt_success"]]
-    gt_neg = [r for r in records if not r["gt_success"]]
-    wm_given_gt_pos = sum(r["wm_success"] for r in gt_pos) / len(gt_pos) if gt_pos else float("nan")
-    wm_given_gt_neg = sum(r["wm_success"] for r in gt_neg) / len(gt_neg) if gt_neg else float("nan")
+    progress_final_mae   = float(np.mean(diffs))
+    progress_final_rmse  = float(np.sqrt(np.mean(diffs ** 2)))
+    agreement_rate       = float(np.mean([r["agreement"] for r in records]))
 
-    print(f"\n=== VLM Success Comparison (rl={rollout_length}) ===")
-    print(f"  GT success rate         : {gt_success_rate:.3f}  ({sum(r['gt_success'] for r in records)}/{n})")
-    print(f"  WM success rate         : {wm_success_rate:.3f}  ({sum(r['wm_success'] for r in records)}/{n})")
-    print(f"  Agreement rate          : {agreement_rate:.3f}")
-    print(f"  WM success | GT success : {wm_given_gt_pos:.3f}  (n={len(gt_pos)})")
-    print(f"  WM success | GT failure : {wm_given_gt_neg:.3f}  (n={len(gt_neg)})")
+    if n >= 2 and gt_finals.std() > 0 and wm_finals.std() > 0:
+        pearson_r = float(np.corrcoef(gt_finals, wm_finals)[0, 1])
+    else:
+        pearson_r = float("nan")
 
-    # ── Save disagreement grids ───────────────────────────────────────────
-    if disagreements:
-        dis_dir = os.path.join(cfg.output_dir, "disagreements_gt_pass_wm_fail")
+    print(f"\n=== Robometer Progress Comparison (rl={rollout_length}) ===")
+    print(f"  GT progress  (final mean) : {gt_finals.mean():.3f}  std={gt_finals.std():.3f}")
+    print(f"  WM progress  (final mean) : {wm_finals.mean():.3f}  std={wm_finals.std():.3f}")
+    print(f"  GT progress  (per-frame)  : {gt_means.mean():.3f}")
+    print(f"  WM progress  (per-frame)  : {wm_means.mean():.3f}")
+    print(f"  MAE  (final)              : {progress_final_mae:.3f}")
+    print(f"  RMSE (final)              : {progress_final_rmse:.3f}")
+    print(f"  Pearson r (final)         : {pearson_r:.3f}")
+    print(f"  Agreement (|Δ|<{cfg.agreement_tol}): {agreement_rate:.3f}")
+
+    # ── Save grids for trajectories with the largest progress gap ────────
+    sorted_records = sorted(
+        enumerate(records), key=lambda kv: kv[1]["progress_diff_final"], reverse=True,
+    )
+    top_disagreements = sorted_records[: cfg.n_save_examples]
+    if top_disagreements:
+        dis_dir = os.path.join(cfg.output_dir, "disagreements_top")
         os.makedirs(dis_dir, exist_ok=True)
-        for rank, (traj_i, gt_f, wm_f, gt_s, wm_s) in enumerate(disagreements[: cfg.n_save_examples]):
-            out_img = os.path.join(dis_dir, f"rank{rank+1:02d}_traj{traj_i:03d}.png")
-            _save_comparison_grid(
-                gt_f, wm_f,
-                gt_success=True, wm_success=False,
-                out_path=out_img,
-                title=f"Traj {traj_i} — GT {gt_s:.2f}  WM {wm_s:.2f}  |  {cfg.task_prompt[:50]}",
+        # Re-sample frames for the top-N — we didn't keep them above to save memory.
+        # The idx in records corresponds to the order of the for-loop, not the dataset.
+        # We re-run the rollout for these specific records.
+        for rank, (rec_idx, rec) in enumerate(top_disagreements):
+            # Replay using the same rng path is non-trivial; instead, just sample
+            # a fresh trajectory and label clearly. To keep behaviour faithful,
+            # we already have the sequences in the records dict for plotting per-
+            # frame progress. We omit re-rendering the videos; users can inspect
+            # frames via --save_rollouts.
+            _save_progress_curve(
+                rec["gt_progress_seq"], rec["wm_progress_seq"],
+                out_path=os.path.join(dis_dir, f"rank{rank+1:02d}_traj{rec_idx:03d}.png"),
+                title=(f"Traj {rec_idx} — GT {rec['gt_progress_final']:.2f}  "
+                       f"WM {rec['wm_progress_final']:.2f}  |Δ|={rec['progress_diff_final']:.2f}"),
             )
-        print(f"\nSaved {min(len(disagreements), cfg.n_save_examples)} "
-              f"disagreement grids to: {dis_dir}/")
+        print(f"\nSaved top-{len(top_disagreements)} progress-curve plots to: {dis_dir}/")
 
-    # ── Save summary plot ─────────────────────────────────────────────────
+    # ── Save summary plots ────────────────────────────────────────────────
     agg = {
-        "model_name":        cfg.model_name,
-        "model_epoch":       cfg.model_epoch,
-        "vlm_model_name":    cfg.vlm_model_name,
-        "task_prompt":       cfg.task_prompt,
-        "n_eval":            n,
-        "rollout_length":    rollout_length,
-        "frameskip":         frameskip,
-        "gt_success_rate":   gt_success_rate,
-        "wm_success_rate":   wm_success_rate,
-        "agreement_rate":    agreement_rate,
-        "wm_success_given_gt_success": wm_given_gt_pos,
-        "wm_success_given_gt_failure": wm_given_gt_neg,
+        "model_name":                cfg.model_name,
+        "model_epoch":               cfg.model_epoch,
+        "task_prompt":               cfg.task_prompt,
+        "n_eval":                    n,
+        "rollout_length":            rollout_length,
+        "frameskip":                 frameskip,
+        "gt_progress_final_mean":    float(gt_finals.mean()),
+        "wm_progress_final_mean":    float(wm_finals.mean()),
+        "gt_progress_final_std":     float(gt_finals.std()),
+        "wm_progress_final_std":     float(wm_finals.std()),
+        "gt_progress_mean_of_mean":  float(gt_means.mean()),
+        "wm_progress_mean_of_mean":  float(wm_means.mean()),
+        "progress_final_mae":        progress_final_mae,
+        "progress_final_rmse":       progress_final_rmse,
+        "progress_final_pearson_r":  pearson_r,
+        "agreement_tol":             cfg.agreement_tol,
+        "agreement_rate":            agreement_rate,
     }
     _save_summary_plot(agg, cfg.output_dir, cfg.model_name, rollout_length)
+    _save_scatter_plot(records, cfg.output_dir, cfg.model_name, rollout_length, pearson_r)
 
     # ── Save JSON ─────────────────────────────────────────────────────────
     out_json = os.path.join(cfg.output_dir, f"compare_success_rl{rollout_length}.json")
@@ -441,13 +486,40 @@ def compare_success_main(cfg):
     return agg
 
 
+def _save_progress_curve(gt_seq, wm_seq, out_path, title=""):
+    """Plot per-frame Robometer progress for GT vs WM on the same axes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    gt = np.asarray(gt_seq, dtype=float)
+    wm = np.asarray(wm_seq, dtype=float)
+    T = max(len(gt), len(wm))
+    x = np.arange(T)
+
+    fig, ax = plt.subplots(figsize=(6, 3.5))
+    if len(gt):
+        ax.plot(x[: len(gt)], gt, marker="o", color="steelblue", linewidth=2, label="GT")
+    if len(wm):
+        ax.plot(x[: len(wm)], wm, marker="s", color="tomato",   linewidth=2, label="WM")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel("Robometer progress")
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=9)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Compare VLM-judged success: GT trajectory vs WM trajectory (GT actions)."
+        description="Compare Robometer-judged progress: GT trajectory vs WM trajectory (GT actions)."
     )
     parser.add_argument("--ckpt_base_path", required=True,
                         help="Base directory containing outputs/<model_name>/")
@@ -459,20 +531,16 @@ def parse_args():
                         help="Number of trajectories to evaluate (default: 100)")
     parser.add_argument("--rollout_length", type=int, default=10,
                         help="WM rollout steps per trajectory (default: 10)")
-    parser.add_argument("--task_prompt", default="Push the T block to the goal position.",
-                        help="Language description of the task for the VLM judge.")
-    parser.add_argument("--vlm_model_name", default="Qwen/Qwen3-VL-4B-Instruct",
-                        help="HuggingFace VLM model ID (default: Qwen/Qwen3-VL-4B-Instruct)")
-    parser.add_argument("--local_files_only", action="store_true",
-                        help="Do not contact HuggingFace (requires cached weights).")
-    parser.add_argument("--output_dir", default="./eval_results/compare_success",
+    parser.add_argument("--task_prompt",
+                        default="Pick up the red cube and place it in the bin.",
+                        help="Task prompt fed to Robometer for progress scoring.")
+    parser.add_argument("--output_dir", default="./eval_results/compare_success_robomimic",
                         help="Directory for JSON, plots, and example images.")
     parser.add_argument("--n_save_examples", type=int, default=10,
-                        help="Max disagreement grids to save (default: 10)")
-    parser.add_argument("--success_threshold", type=float, default=0.5,
-                        help="VLM score above which a frame is judged a success (default: 0.5)")
+                        help="Max top-disagreement progress-curve plots to save (default: 10)")
     parser.add_argument("--agreement_tol", type=float, default=0.2,
-                        help="|gt_score - wm_score| below this counts as agreement (default: 0.2)")
+                        help="|gt_progress_final - wm_progress_final| below this counts "
+                             "as agreement (default: 0.2)")
     parser.add_argument("--save_rollouts", action="store_true",
                         help="Save GT and WM frames as .mp4 videos and .npy arrays.")
     parser.add_argument("--video_fps", type=int, default=4,
